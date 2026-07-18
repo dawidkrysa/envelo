@@ -76,6 +76,8 @@ A single PostgreSQL instance is used, with **one schema per service** (`auth`, `
 
 Each service's own migrations are managed independently via Alembic, scoped to its schema.
 
+See [`docs/erd.md`](erd.md) for the entity-relationship diagram of the current schema.
+
 ## Key decisions
 
 See [`docs/adr/`](adr) for the full reasoning behind:
