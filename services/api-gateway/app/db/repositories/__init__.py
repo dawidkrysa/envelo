@@ -23,6 +23,12 @@ from app.db.repositories.payee import (
     get_payees,
     update_payee,
 )
+from app.db.repositories.statement import (
+    create_statement,
+    delete_statement,
+    get_statements,
+    update_statement,
+)
 
 __all__ = [
     "get_accounts",
@@ -42,4 +48,8 @@ __all__ = [
     "update_envelope",
     "delete_envelope",
     "transfer_envelope_allocation",
+    "get_statements",
+    "create_statement",
+    "update_statement",
+    "delete_statement",
 ]

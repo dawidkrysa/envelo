@@ -38,6 +38,7 @@ envelopes_router = APIRouter(prefix="/budget/envelopes", tags=["Envelopes"])
 envelope_allocations_router = APIRouter(
     prefix="/budget/envelope-allocations", tags=["Envelope Allocations"]
 )
+statements_router = APIRouter(prefix="/budget/statements", tags=["Statements"])
 
 
 # ==============================================================================
@@ -284,8 +285,68 @@ async def transfer_envelope_allocation_v1(
     return await repo.transfer_envelope_allocation(db, data)
 
 
+# ==============================================================================
+# Statements
+# ==============================================================================
+
+
+# Create
+@statements_router.post(
+    "",
+    summary="Create statement",
+    status_code=status.HTTP_201_CREATED,
+    response_model=schemas.StatementRead,
+)
+async def create_statement_v1(
+    data: schemas.StatementCreate, db: AsyncSession = Depends(get_db)
+):
+    return await repo.create_statement(db, data)
+
+
+# Read
+@statements_router.get(
+    "",
+    summary="List of all statements",
+    status_code=status.HTTP_200_OK,
+    response_model=list[schemas.StatementRead],
+)
+async def get_statements_v1(
+    accountId: uuid.UUID | None = None, db: AsyncSession = Depends(get_db)
+):
+    return await repo.get_statements(db, accountId)
+
+
+# Update
+@statements_router.put(
+    "/{statementId}",
+    summary="Update statement",
+    status_code=status.HTTP_200_OK,
+    response_model=schemas.StatementRead,
+)
+async def update_statement_v1(
+    data: schemas.StatementUpdate,
+    statementId: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    return await repo.update_statement(db, statementId, data)
+
+
+# Delete
+@statements_router.delete(
+    "/{statementId}",
+    summary="Delete statement",
+    status_code=status.HTTP_200_OK,
+    response_model=schemas.StatementDelete,
+)
+async def delete_statement_v1(
+    statementId: uuid.UUID, db: AsyncSession = Depends(get_db)
+):
+    return await repo.delete_statement(db, statementId)
+
+
 app.include_router(accounts_router)
 app.include_router(payees_router)
 app.include_router(category_groups_router)
 app.include_router(envelopes_router)
 app.include_router(envelope_allocations_router)
+app.include_router(statements_router)
