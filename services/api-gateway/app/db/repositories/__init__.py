@@ -4,6 +4,12 @@ from app.db.repositories.account import (
     get_accounts,
     update_account,
 )
+from app.db.repositories.category_group import (
+    create_category_group,
+    delete_category_group,
+    get_category_groups,
+    update_category_group,
+)
 from app.db.repositories.payee import (
     create_payee,
     delete_payee,
@@ -20,4 +26,8 @@ __all__ = [
     "create_payee",
     "update_payee",
     "delete_payee",
+    "get_category_groups",
+    "create_category_group",
+    "update_category_group",
+    "delete_category_group",
 ]

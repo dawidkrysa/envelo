@@ -1,4 +1,10 @@
 from app.schemas.account import AccountCreate, AccountDelete, AccountRead, AccountUpdate
+from app.schemas.category_group import (
+    CategoryGroupCreate,
+    CategoryGroupDelete,
+    CategoryGroupRead,
+    CategoryGroupUpdate,
+)
 from app.schemas.payee import PayeeCreate, PayeeDelete, PayeeRead, PayeeUpdate
 
 __all__ = [
@@ -10,4 +16,8 @@ __all__ = [
     "PayeeCreate",
     "PayeeUpdate",
     "PayeeDelete",
+    "CategoryGroupRead",
+    "CategoryGroupCreate",
+    "CategoryGroupUpdate",
+    "CategoryGroupDelete",
 ]

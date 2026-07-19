@@ -31,6 +31,9 @@ def health_check() -> dict[str, str]:
 
 accounts_router = APIRouter(prefix="/budget/accounts", tags=["Accounts"])
 payees_router = APIRouter(prefix="/budget/payees", tags=["Payees"])
+category_groups_router = APIRouter(
+    prefix="/budget/category-groups", tags=["Category Groups"]
+)
 
 
 # ==============================================================================
@@ -143,5 +146,65 @@ async def delete_payee_v1(payeeId: uuid.UUID, db: AsyncSession = Depends(get_db)
     return await repo.delete_payee(db, payeeId)
 
 
+# ==============================================================================
+# Category Groups
+# ==============================================================================
+
+
+# Create
+@category_groups_router.post(
+    "",
+    summary="Create category group",
+    status_code=status.HTTP_201_CREATED,
+    response_model=schemas.CategoryGroupRead,
+)
+async def create_category_group_v1(
+    data: schemas.CategoryGroupCreate, db: AsyncSession = Depends(get_db)
+):
+    return await repo.create_category_group(db, data)
+
+
+# Read
+@category_groups_router.get(
+    "",
+    summary="List of all category groups",
+    status_code=status.HTTP_200_OK,
+    response_model=list[schemas.CategoryGroupRead],
+)
+async def get_category_groups_v1(
+    skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)
+):
+    return await repo.get_category_groups(db, skip, limit)
+
+
+# Update
+@category_groups_router.put(
+    "/{categoryGroupId}",
+    summary="Update category group",
+    status_code=status.HTTP_200_OK,
+    response_model=schemas.CategoryGroupRead,
+)
+async def update_category_group_v1(
+    data: schemas.CategoryGroupUpdate,
+    categoryGroupId: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    return await repo.update_category_group(db, categoryGroupId, data)
+
+
+# Delete
+@category_groups_router.delete(
+    "/{categoryGroupId}",
+    summary="Delete category group",
+    status_code=status.HTTP_200_OK,
+    response_model=schemas.CategoryGroupDelete,
+)
+async def delete_category_group_v1(
+    categoryGroupId: uuid.UUID, db: AsyncSession = Depends(get_db)
+):
+    return await repo.delete_category_group(db, categoryGroupId)
+
+
 app.include_router(accounts_router)
 app.include_router(payees_router)
+app.include_router(category_groups_router)
