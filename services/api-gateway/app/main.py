@@ -274,6 +274,47 @@ async def delete_envelope_v1(envelopeId: uuid.UUID, db: AsyncSession = Depends(g
 # ==============================================================================
 
 
+# Create
+@envelope_allocations_router.post(
+    "",
+    summary="Create envelope allocation",
+    status_code=status.HTTP_201_CREATED,
+    response_model=schemas.EnvelopeAllocationRead,
+)
+async def create_envelope_allocation_v1(
+    data: schemas.EnvelopeAllocationCreate, db: AsyncSession = Depends(get_db)
+):
+    return await repo.create_envelope_allocation(db, data)
+
+
+# Read
+@envelope_allocations_router.get(
+    "",
+    summary="List of all envelope allocations",
+    status_code=status.HTTP_200_OK,
+    response_model=list[schemas.EnvelopeAllocationRead],
+)
+async def get_envelope_allocations_v1(
+    envelopeId: uuid.UUID | None = None, db: AsyncSession = Depends(get_db)
+):
+    return await repo.get_envelope_allocations(db, envelopeId)
+
+
+# Update
+@envelope_allocations_router.put(
+    "/{envelopeAllocationId}",
+    summary="Update envelope allocation",
+    status_code=status.HTTP_200_OK,
+    response_model=schemas.EnvelopeAllocationRead,
+)
+async def update_envelope_allocation_v1(
+    data: schemas.EnvelopeAllocationUpdate,
+    envelopeAllocationId: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    return await repo.update_envelope_allocation(db, envelopeAllocationId, data)
+
+
 # Move money between two envelope allocations (same month) in one atomic operation
 @envelope_allocations_router.post(
     "/transfer",
