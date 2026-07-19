@@ -1,6 +1,7 @@
 import logging
 import uuid
 from contextlib import asynccontextmanager
+from datetime import date
 
 from app import schemas
 from app.core.logging import setup_logging
@@ -39,6 +40,7 @@ envelope_allocations_router = APIRouter(
     prefix="/budget/envelope-allocations", tags=["Envelope Allocations"]
 )
 statements_router = APIRouter(prefix="/budget/statements", tags=["Statements"])
+transactions_router = APIRouter(prefix="/budget/transactions", tags=["Transactions"])
 
 
 # ==============================================================================
@@ -344,9 +346,78 @@ async def delete_statement_v1(
     return await repo.delete_statement(db, statementId)
 
 
+# ==============================================================================
+# Transactions
+# ==============================================================================
+
+
+# Create
+@transactions_router.post(
+    "",
+    summary="Create transaction",
+    status_code=status.HTTP_201_CREATED,
+    response_model=schemas.TransactionRead,
+)
+async def create_transaction_v1(
+    data: schemas.TransactionCreate, db: AsyncSession = Depends(get_db)
+):
+    return await repo.create_transaction(db, data)
+
+
+# Read
+@transactions_router.get(
+    "",
+    summary="List of all transactions",
+    status_code=status.HTTP_200_OK,
+    response_model=list[schemas.TransactionRead],
+)
+async def get_transactions_v1(
+    accountId: uuid.UUID | None = None,
+    envelopeId: uuid.UUID | None = None,
+    categoryGroupId: uuid.UUID | None = None,
+    dateFrom: date | None = None,
+    dateTo: date | None = None,
+    skip: int = 0,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+):
+    return await repo.get_transactions(
+        db, accountId, envelopeId, categoryGroupId, dateFrom, dateTo, skip, limit
+    )
+
+
+# Update
+@transactions_router.put(
+    "/{transactionId}",
+    summary="Update transaction",
+    status_code=status.HTTP_200_OK,
+    response_model=schemas.TransactionRead,
+)
+async def update_transaction_v1(
+    data: schemas.TransactionUpdate,
+    transactionId: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    return await repo.update_transaction(db, transactionId, data)
+
+
+# Delete
+@transactions_router.delete(
+    "/{transactionId}",
+    summary="Delete transaction",
+    status_code=status.HTTP_200_OK,
+    response_model=schemas.TransactionDelete,
+)
+async def delete_transaction_v1(
+    transactionId: uuid.UUID, db: AsyncSession = Depends(get_db)
+):
+    return await repo.delete_transaction(db, transactionId)
+
+
 app.include_router(accounts_router)
 app.include_router(payees_router)
 app.include_router(category_groups_router)
 app.include_router(envelopes_router)
 app.include_router(envelope_allocations_router)
 app.include_router(statements_router)
+app.include_router(transactions_router)

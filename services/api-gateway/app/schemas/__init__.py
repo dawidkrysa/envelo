@@ -25,6 +25,12 @@ from app.schemas.statement import (
     StatementRead,
     StatementUpdate,
 )
+from app.schemas.transaction import (
+    TransactionCreate,
+    TransactionDelete,
+    TransactionRead,
+    TransactionUpdate,
+)
 
 __all__ = [
     "AccountRead",
@@ -52,4 +58,8 @@ __all__ = [
     "StatementCreate",
     "StatementUpdate",
     "StatementDelete",
+    "TransactionRead",
+    "TransactionCreate",
+    "TransactionUpdate",
+    "TransactionDelete",
 ]

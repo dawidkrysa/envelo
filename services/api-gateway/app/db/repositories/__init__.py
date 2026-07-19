@@ -29,6 +29,12 @@ from app.db.repositories.statement import (
     get_statements,
     update_statement,
 )
+from app.db.repositories.transaction import (
+    create_transaction,
+    delete_transaction,
+    get_transactions,
+    update_transaction,
+)
 
 __all__ = [
     "get_accounts",
@@ -52,4 +58,8 @@ __all__ = [
     "create_statement",
     "update_statement",
     "delete_statement",
+    "get_transactions",
+    "create_transaction",
+    "update_transaction",
+    "delete_transaction",
 ]
