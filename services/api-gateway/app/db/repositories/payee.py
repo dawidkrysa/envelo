@@ -4,7 +4,7 @@ from app.db.models import Payee
 from app.db.repositories.constants import SEED_USER_ID
 from app.schemas.payee import PayeeCreate, PayeeUpdate
 from fastapi import HTTPException
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -51,6 +51,23 @@ async def update_payee(db: AsyncSession, payeeId: uuid.UUID, data: PayeeUpdate):
 
 async def create_payee(db: AsyncSession, data: PayeeCreate):
     payee = Payee(**data.model_dump(), user_id=SEED_USER_ID)
+    db.add(payee)
+    await db.commit()
+    await db.refresh(payee)
+    return payee
+
+
+async def get_or_create_payee(db: AsyncSession, name: str) -> Payee:
+    normalized_name = name.strip()
+
+    result = await db.execute(
+        select(Payee).where(func.lower(Payee.name) == normalized_name.lower())
+    )
+    payee = result.scalar_one_or_none()
+    if payee is not None:
+        return payee
+
+    payee = Payee(name=normalized_name, user_id=SEED_USER_ID)
     db.add(payee)
     await db.commit()
     await db.refresh(payee)
