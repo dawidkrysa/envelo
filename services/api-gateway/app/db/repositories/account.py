@@ -1,14 +1,12 @@
 import uuid
 
 from app.db.models import Account
+from app.db.repositories.constants import SEED_USER_ID
 from app.schemas.account import AccountCreate, AccountUpdate
 from fastapi import HTTPException
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-
-# Placeholder until Auth Service exists (Phase 4) - same user as infra/postgres/init/03_seed_data.sql
-SEED_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
 async def get_accounts(db: AsyncSession, skip: int = 0, limit: int = 100):
