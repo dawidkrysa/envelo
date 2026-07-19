@@ -2,15 +2,10 @@ import logging
 import uuid
 from contextlib import asynccontextmanager
 
+from app import schemas
 from app.core.logging import setup_logging
-from app.db.repositories import (
-    create_account,
-    delete_account,
-    get_accounts,
-    update_account,
-)
+from app.db import repositories as repo
 from app.db.session import engine, get_db
-from app.schemas import AccountCreate, AccountDelete, AccountRead, AccountUpdate
 from fastapi import APIRouter, Depends, FastAPI, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,49 +29,119 @@ def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
-budget_router = APIRouter(prefix="/budget", tags=["Budget"])
+accounts_router = APIRouter(prefix="/budget/accounts", tags=["Accounts"])
+payees_router = APIRouter(prefix="/budget/payees", tags=["Payees"])
 
 
-@budget_router.get(
-    "/accounts",
-    summary="List of all accounts",
-    status_code=status.HTTP_200_OK,
-    response_model=list[AccountRead],
-)
-async def get_accounts_v1(db: AsyncSession = Depends(get_db)):
-    return await get_accounts(db)
+# ==============================================================================
+# Accounts
+# ==============================================================================
 
 
-@budget_router.delete(
-    "/accounts/{accountId}",
-    summary="Delete account",
-    status_code=status.HTTP_200_OK,
-    response_model=AccountDelete,
-)
-async def delete_account_v1(accountId: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    return await delete_account(db, accountId)
-
-
-@budget_router.put(
-    "/accounts/{accountId}",
-    summary="Update account",
-    status_code=status.HTTP_200_OK,
-    response_model=AccountUpdate,
-)
-async def update_account_v1(
-    data: AccountUpdate, accountId: uuid.UUID, db: AsyncSession = Depends(get_db)
-):
-    return await update_account(db, accountId, data)
-
-
-@budget_router.post(
-    "/accounts",
+# Create
+@accounts_router.post(
+    "",
     summary="Create account",
     status_code=status.HTTP_201_CREATED,
-    response_model=AccountRead,
+    response_model=schemas.AccountRead,
 )
-async def create_account_v1(data: AccountCreate, db: AsyncSession = Depends(get_db)):
-    return await create_account(db, data)
+async def create_account_v1(
+    data: schemas.AccountCreate, db: AsyncSession = Depends(get_db)
+):
+    return await repo.create_account(db, data)
 
 
-app.include_router(budget_router)
+# Read
+@accounts_router.get(
+    "",
+    summary="List of all accounts",
+    status_code=status.HTTP_200_OK,
+    response_model=list[schemas.AccountRead],
+)
+async def get_accounts_v1(
+    skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)
+):
+    return await repo.get_accounts(db, skip, limit)
+
+
+# Update
+@accounts_router.put(
+    "/{accountId}",
+    summary="Update account",
+    status_code=status.HTTP_200_OK,
+    response_model=schemas.AccountUpdate,
+)
+async def update_account_v1(
+    data: schemas.AccountUpdate, accountId: uuid.UUID, db: AsyncSession = Depends(get_db)
+):
+    return await repo.update_account(db, accountId, data)
+
+
+# Delete
+@accounts_router.delete(
+    "/{accountId}",
+    summary="Delete account",
+    status_code=status.HTTP_200_OK,
+    response_model=schemas.AccountDelete,
+)
+async def delete_account_v1(accountId: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    return await repo.delete_account(db, accountId)
+
+
+# ==============================================================================
+# Payees
+# ==============================================================================
+
+
+# Create
+@payees_router.post(
+    "",
+    summary="Create payee",
+    status_code=status.HTTP_201_CREATED,
+    response_model=schemas.PayeeRead,
+)
+async def create_payee_v1(
+    data: schemas.PayeeCreate, db: AsyncSession = Depends(get_db)
+):
+    return await repo.create_payee(db, data)
+
+
+# Read
+@payees_router.get(
+    "",
+    summary="List of all payees",
+    status_code=status.HTTP_200_OK,
+    response_model=list[schemas.PayeeRead],
+)
+async def get_payee_v1(
+    skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)
+):
+    return await repo.get_payees(db, skip, limit)
+
+
+# Update
+@payees_router.put(
+    "/{payeeId}",
+    summary="Update payee",
+    status_code=status.HTTP_200_OK,
+    response_model=schemas.PayeeRead,
+)
+async def update_payee_v1(
+    data: schemas.PayeeUpdate, payeeId: uuid.UUID, db: AsyncSession = Depends(get_db)
+):
+    return await repo.update_payee(db, payeeId, data)
+
+
+# Delete
+@payees_router.delete(
+    "/{payeeId}",
+    summary="Delete payee",
+    status_code=status.HTTP_200_OK,
+    response_model=schemas.PayeeDelete,
+)
+async def delete_payee_v1(payeeId: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    return await repo.delete_payee(db, payeeId)
+
+
+app.include_router(accounts_router)
+app.include_router(payees_router)
