@@ -74,7 +74,7 @@ Consumes alert-worthy events (e.g. "envelope nearing limit") and delivers them v
 
 A single PostgreSQL instance is used, with **one schema per service** (`auth`, `budget`, `transactions`, …) rather than fully separate database instances. This gives clear data ownership and an easy migration path to fully separate databases later, without the operational overhead of managing multiple database instances from day one.
 
-Each service's own migrations are managed independently via Alembic, scoped to its schema.
+Each service's own migrations are managed independently via Alembic, scoped to its schema. See [`docs/migrations.md`](migrations.md) for how to run and create migrations locally.
 
 See [`docs/erd.md`](erd.md) for the entity-relationship diagram of the current schema.
 

@@ -75,8 +75,14 @@ flowchart TB
 git clone https://github.com/<your-username>/envelo.git
 cd envelo
 cp .env.example .env
+docker compose up -d postgres redis
+cd services/api-gateway && pip install -r requirements.txt && alembic upgrade head && cd ../..
 docker compose up
 ```
+
+The `alembic upgrade head` step creates the database tables — see
+[`docs/migrations.md`](docs/migrations.md) for details and how to add new
+migrations.
 
 Once the containers are running, check that the API Gateway is healthy:
 
