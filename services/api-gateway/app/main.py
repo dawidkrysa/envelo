@@ -35,6 +35,9 @@ category_groups_router = APIRouter(
     prefix="/budget/category-groups", tags=["Category Groups"]
 )
 envelopes_router = APIRouter(prefix="/budget/envelopes", tags=["Envelopes"])
+envelope_allocations_router = APIRouter(
+    prefix="/budget/envelope-allocations", tags=["Envelope Allocations"]
+)
 
 
 # ==============================================================================
@@ -263,7 +266,26 @@ async def delete_envelope_v1(envelopeId: uuid.UUID, db: AsyncSession = Depends(g
     return await repo.delete_envelope(db, envelopeId)
 
 
+# ==============================================================================
+# Envelope Allocations
+# ==============================================================================
+
+
+# Move money between two envelope allocations (same month) in one atomic operation
+@envelope_allocations_router.post(
+    "/transfer",
+    summary="Transfer money between two envelope allocations",
+    status_code=status.HTTP_200_OK,
+    response_model=list[schemas.EnvelopeAllocationRead],
+)
+async def transfer_envelope_allocation_v1(
+    data: schemas.EnvelopeAllocationTransfer, db: AsyncSession = Depends(get_db)
+):
+    return await repo.transfer_envelope_allocation(db, data)
+
+
 app.include_router(accounts_router)
 app.include_router(payees_router)
 app.include_router(category_groups_router)
 app.include_router(envelopes_router)
+app.include_router(envelope_allocations_router)

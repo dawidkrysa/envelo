@@ -11,6 +11,13 @@ from app.schemas.envelope import (
     EnvelopeRead,
     EnvelopeUpdate,
 )
+from app.schemas.envelope_allocation import (
+    EnvelopeAllocationCreate,
+    EnvelopeAllocationDelete,
+    EnvelopeAllocationRead,
+    EnvelopeAllocationTransfer,
+    EnvelopeAllocationUpdate,
+)
 from app.schemas.payee import PayeeCreate, PayeeDelete, PayeeRead, PayeeUpdate
 
 __all__ = [
@@ -30,4 +37,9 @@ __all__ = [
     "EnvelopeCreate",
     "EnvelopeUpdate",
     "EnvelopeDelete",
+    "EnvelopeAllocationRead",
+    "EnvelopeAllocationCreate",
+    "EnvelopeAllocationUpdate",
+    "EnvelopeAllocationDelete",
+    "EnvelopeAllocationTransfer",
 ]

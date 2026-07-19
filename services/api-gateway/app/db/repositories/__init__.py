@@ -16,6 +16,7 @@ from app.db.repositories.envelope import (
     get_envelopes,
     update_envelope,
 )
+from app.db.repositories.envelope_allocation import transfer_envelope_allocation
 from app.db.repositories.payee import (
     create_payee,
     delete_payee,
@@ -40,4 +41,5 @@ __all__ = [
     "create_envelope",
     "update_envelope",
     "delete_envelope",
+    "transfer_envelope_allocation",
 ]
