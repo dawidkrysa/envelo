@@ -34,6 +34,7 @@ payees_router = APIRouter(prefix="/budget/payees", tags=["Payees"])
 category_groups_router = APIRouter(
     prefix="/budget/category-groups", tags=["Category Groups"]
 )
+envelopes_router = APIRouter(prefix="/budget/envelopes", tags=["Envelopes"])
 
 
 # ==============================================================================
@@ -205,6 +206,64 @@ async def delete_category_group_v1(
     return await repo.delete_category_group(db, categoryGroupId)
 
 
+# ==============================================================================
+# Envelopes
+# ==============================================================================
+
+
+# Create
+@envelopes_router.post(
+    "",
+    summary="Create envelope",
+    status_code=status.HTTP_201_CREATED,
+    response_model=schemas.EnvelopeRead,
+)
+async def create_envelope_v1(
+    data: schemas.EnvelopeCreate, db: AsyncSession = Depends(get_db)
+):
+    return await repo.create_envelope(db, data)
+
+
+# Read
+@envelopes_router.get(
+    "",
+    summary="List of all envelopes",
+    status_code=status.HTTP_200_OK,
+    response_model=list[schemas.EnvelopeRead],
+)
+async def get_envelopes_v1(
+    categoryGroupId: uuid.UUID | None = None, db: AsyncSession = Depends(get_db)
+):
+    return await repo.get_envelopes(db, categoryGroupId)
+
+
+# Update
+@envelopes_router.put(
+    "/{envelopeId}",
+    summary="Update envelope",
+    status_code=status.HTTP_200_OK,
+    response_model=schemas.EnvelopeRead,
+)
+async def update_envelope_v1(
+    data: schemas.EnvelopeUpdate,
+    envelopeId: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    return await repo.update_envelope(db, envelopeId, data)
+
+
+# Delete
+@envelopes_router.delete(
+    "/{envelopeId}",
+    summary="Delete envelope",
+    status_code=status.HTTP_200_OK,
+    response_model=schemas.EnvelopeDelete,
+)
+async def delete_envelope_v1(envelopeId: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    return await repo.delete_envelope(db, envelopeId)
+
+
 app.include_router(accounts_router)
 app.include_router(payees_router)
 app.include_router(category_groups_router)
+app.include_router(envelopes_router)

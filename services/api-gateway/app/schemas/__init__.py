@@ -5,6 +5,12 @@ from app.schemas.category_group import (
     CategoryGroupRead,
     CategoryGroupUpdate,
 )
+from app.schemas.envelope import (
+    EnvelopeCreate,
+    EnvelopeDelete,
+    EnvelopeRead,
+    EnvelopeUpdate,
+)
 from app.schemas.payee import PayeeCreate, PayeeDelete, PayeeRead, PayeeUpdate
 
 __all__ = [
@@ -20,4 +26,8 @@ __all__ = [
     "CategoryGroupCreate",
     "CategoryGroupUpdate",
     "CategoryGroupDelete",
+    "EnvelopeRead",
+    "EnvelopeCreate",
+    "EnvelopeUpdate",
+    "EnvelopeDelete",
 ]
