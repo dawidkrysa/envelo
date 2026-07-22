@@ -17,6 +17,10 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    max_upload_size_bytes: int = 100 * 1024 * 1024  # 100 MB
+    allowed_statement_formats: str = "csv"
+    statement_upload_dir: str
+
     @property
     def database_url(self) -> URL:
         return URL.create(

@@ -3,13 +3,17 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
+from app.db.models.base import Base
+from app.db.models.enums import (
+    CategorizationSource,
+    FileFormat,
+    FileTransferStatus,
+    get_enum_values,
+)
+from app.db.models.mixins import UUIDPrimaryKeyMixin
 from sqlalchemy import TIMESTAMP, Date, ForeignKey, Numeric, text
 from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-
-from app.db.models.base import Base
-from app.db.models.enums import CategorizationSource, FileFormat, get_enum_values
-from app.db.models.mixins import UUIDPrimaryKeyMixin
 
 if TYPE_CHECKING:
     from app.db.models.budget import Account, Envelope, Payee
@@ -31,6 +35,13 @@ class Statement(UUIDPrimaryKeyMixin, Base):
     imported_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=text("now()")
     )
+    status: Mapped[FileTransferStatus | None] = mapped_column(
+        SqlEnum(FileTransferStatus, values_callable=get_enum_values, native_enum=False),
+        nullable=True,
+    )
+    storage_path: Mapped[str | None] = mapped_column(nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(nullable=True)
+    error_message: Mapped[str | None] = mapped_column(nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="statements")
     account: Mapped["Account"] = relationship(back_populates="statements")
@@ -60,7 +71,9 @@ class Transaction(UUIDPrimaryKeyMixin, Base):
     transaction_date: Mapped[date] = mapped_column(Date)
     cleared: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
     categorization_source: Mapped[CategorizationSource | None] = mapped_column(
-        SqlEnum(CategorizationSource, values_callable=get_enum_values, native_enum=False),
+        SqlEnum(
+            CategorizationSource, values_callable=get_enum_values, native_enum=False
+        ),
         nullable=True,
     )
 

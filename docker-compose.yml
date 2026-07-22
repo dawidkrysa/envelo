@@ -39,6 +39,9 @@ services:
         condition: service_started
     env_file:
       - .env
+    volumes:
+      - filetransfers:${STATEMENT_UPLOAD_DIR}
 
 volumes:
+  filetransfers:
   pgdata:
