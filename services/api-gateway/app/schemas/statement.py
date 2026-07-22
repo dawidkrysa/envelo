@@ -13,6 +13,7 @@ class StatementRead(BaseModel):
     format: FileFormat
     imported_at: datetime
     status: FileTransferStatus | None = None
+    error_message: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

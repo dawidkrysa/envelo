@@ -6,6 +6,7 @@ from app.core.config import get_settings
 from app.db.models import Account, FileFormat, FileTransferStatus, Statement
 from app.db.repositories.constants import SEED_USER_ID
 from app.schemas.statement import StatementCreate, StatementUpdate
+from app.services.statement_import import import_statement
 from fastapi import HTTPException
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
@@ -116,4 +117,5 @@ async def create_statement(db: AsyncSession, data: StatementCreate):
     db.add(statement)
     await db.commit()
     await db.refresh(statement)
+    statement = await import_statement(db, statement)
     return statement
