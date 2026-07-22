@@ -1,4 +1,5 @@
 import os
+import tempfile
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -13,6 +14,14 @@ for _key, _value in dotenv_values(_ROOT_ENV).items():
     if _value is not None:
         os.environ.setdefault(_key, _value)
 os.environ["POSTGRES_HOST"] = "localhost"
+
+# Same host-vs-container gap as POSTGRES_HOST above: STATEMENT_UPLOAD_DIR is an
+# absolute container path (e.g. "/app/files"), which on the host resolves to a
+# nonsense location (e.g. the current drive's root on Windows). Point it at a
+# real temp dir instead.
+os.environ["STATEMENT_UPLOAD_DIR"] = str(
+    Path(tempfile.gettempdir()) / "envelo-statement-uploads-test"
+)
 
 import pytest_asyncio  # noqa: E402
 from app.core.config import get_settings  # noqa: E402

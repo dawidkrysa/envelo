@@ -40,8 +40,9 @@ async def test_delete_account_with_statements_is_blocked(client):
     account_id = create_response.json()["id"]
 
     statement_response = await client.post(
-        "/budget/statements",
-        json={"account_id": account_id, "filename": "jan.csv", "format": "csv"},
+        "/budget/statements/upload",
+        data={"account_id": account_id},
+        files={"file": ("jan.csv", b"date,amount\n2026-01-01,10.00\n", "text/csv")},
     )
     assert statement_response.status_code == 201
 
