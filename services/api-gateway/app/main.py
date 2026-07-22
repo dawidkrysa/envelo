@@ -2,12 +2,13 @@ import logging
 import uuid
 from contextlib import asynccontextmanager
 from datetime import date
+from typing import Annotated
 
 from app import schemas
 from app.core.logging import setup_logging
 from app.db import repositories as repo
 from app.db.session import engine, get_db
-from fastapi import APIRouter, Depends, FastAPI, status
+from fastapi import APIRouter, Depends, FastAPI, Form, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 setup_logging()
@@ -82,7 +83,9 @@ async def get_accounts_v1(
     response_model=schemas.AccountUpdate,
 )
 async def update_account_v1(
-    data: schemas.AccountUpdate, accountId: uuid.UUID, db: AsyncSession = Depends(get_db)
+    data: schemas.AccountUpdate,
+    accountId: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
 ):
     return await repo.update_account(db, accountId, data)
 
@@ -335,13 +338,14 @@ async def transfer_envelope_allocation_v1(
 
 # Create
 @statements_router.post(
-    "",
-    summary="Create statement",
+    "/upload",
+    summary="Upload a bank statement file",
     status_code=status.HTTP_201_CREATED,
     response_model=schemas.StatementRead,
 )
 async def create_statement_v1(
-    data: schemas.StatementCreate, db: AsyncSession = Depends(get_db)
+    data: Annotated[schemas.StatementCreate, Form()],
+    db: AsyncSession = Depends(get_db),
 ):
     return await repo.create_statement(db, data)
 

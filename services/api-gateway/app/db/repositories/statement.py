@@ -1,6 +1,9 @@
+import os
 import uuid
 
-from app.db.models import Statement
+import aiofiles
+from app.core.config import get_settings
+from app.db.models import Account, FileFormat, FileTransferStatus, Statement
 from app.db.repositories.constants import SEED_USER_ID
 from app.schemas.statement import StatementCreate, StatementUpdate
 from fastapi import HTTPException
@@ -60,7 +63,56 @@ async def update_statement(
 
 
 async def create_statement(db: AsyncSession, data: StatementCreate):
-    statement = Statement(**data.model_dump(), user_id=SEED_USER_ID)
+    result = await db.execute(select(Account).where(Account.id == data.account_id))
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    filename = data.file.filename or ""
+    extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+    settings = get_settings()
+    allowed_formats = {
+        fmt.strip().lower() for fmt in settings.allowed_statement_formats.split(",")
+    }
+    if extension not in allowed_formats:
+        raise HTTPException(
+            status_code=400, detail=f"Unsupported file format: '{extension}'"
+        )
+
+    try:
+        file_format = FileFormat(extension)
+    except ValueError:
+        raise HTTPException(
+            status_code=400, detail=f"Unsupported file format: '{extension}'"
+        )
+
+    content = await data.file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+    if len(content) > settings.max_upload_size_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File exceeds maximum allowed size of {settings.max_upload_size_bytes} bytes",
+        )
+
+    statement_id = uuid.uuid4()
+    os.makedirs(settings.statement_upload_dir, exist_ok=True)
+    storage_path = os.path.join(
+        settings.statement_upload_dir, f"{statement_id}.{extension}"
+    )
+    async with aiofiles.open(storage_path, "wb") as f:
+        await f.write(content)
+
+    statement = Statement(
+        id=statement_id,
+        user_id=SEED_USER_ID,
+        account_id=data.account_id,
+        filename=filename,
+        format=file_format,
+        status=FileTransferStatus.PENDING,
+        storage_path=storage_path,
+        size_bytes=len(content),
+    )
     db.add(statement)
     await db.commit()
     await db.refresh(statement)

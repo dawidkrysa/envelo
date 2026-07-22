@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime
 
-from app.db.models import FileFormat
+from app.db.models import FileFormat, FileTransferStatus
+from fastapi import UploadFile
 from pydantic import BaseModel, ConfigDict
 
 
@@ -11,14 +12,14 @@ class StatementRead(BaseModel):
     filename: str
     format: FileFormat
     imported_at: datetime
+    status: FileTransferStatus | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class StatementCreate(BaseModel):
     account_id: uuid.UUID
-    filename: str
-    format: FileFormat
+    file: UploadFile
 
     model_config = ConfigDict(from_attributes=True)
 
