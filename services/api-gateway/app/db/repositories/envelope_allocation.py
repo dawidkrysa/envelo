@@ -71,9 +71,6 @@ async def create_envelope_allocation(db: AsyncSession, data: EnvelopeAllocationC
 async def get_or_build_envelope_allocation(
     db: AsyncSession, envelopeId: uuid.UUID, month: date
 ) -> EnvelopeAllocation:
-    """Zwraca istniejący wiersz alokacji dla (envelope, month) albo "wirtualny"
-    obiekt z assigned_amount=0, jeśli wiersz jeszcze nie istnieje (nie jest
-    dodany do sesji - wywołujący decyduje, czy i kiedy go zapisać)."""
     result = await db.execute(
         select(EnvelopeAllocation).where(
             EnvelopeAllocation.envelope_id == envelopeId,
