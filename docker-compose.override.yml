@@ -1,0 +1,18 @@
+# Local development overrides, merged automatically by `docker compose up`
+# (docker-compose.yml stays production-safe on its own: no bind mount, no
+# --reload). CI/production deploys that invoke compose with an explicit
+# `-f docker-compose.yml` skip this file entirely.
+services:
+  api-gateway:
+    volumes:
+      - ./services/api-gateway/app:/app/app
+    command:
+      [
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--reload",
+      ]
