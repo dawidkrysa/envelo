@@ -1,6 +1,7 @@
 import aiofiles
 from app.db.models import Account, Payee, Statement, Transaction
-from app.db.models.enums import FileTransferStatus
+from app.db.models.enums import CategorizationSource, FileTransferStatus
+from app.db.repositories.categorization_rule import match_envelope_for_transaction
 from app.db.repositories.constants import SEED_USER_ID
 from app.db.repositories.payee import get_or_create_payee
 from app.schemas.transaction import TransactionCreate
@@ -45,18 +46,25 @@ async def import_statement(db: AsyncSession, statement: Statement) -> Statement:
             if row.payee:
                 payee = await get_or_create_payee(db, row.payee)
 
+            payee_id = payee.id if payee is not None else None
+            envelope_id = await match_envelope_for_transaction(
+                db, payee_id, row.description
+            )
+
             try:
                 data = TransactionCreate(
                     account_id=statement.account_id,
-                    envelope_id=None,
-                    payee_id=payee.id if payee is not None else None,
+                    envelope_id=envelope_id,
+                    payee_id=payee_id,
                     statement_id=statement.id,
                     amount=row.amount,
                     currency=account.currency,
                     description=row.description,
                     transaction_date=row.transaction_date,
                     cleared=False,
-                    categorization_source=None,
+                    categorization_source=(
+                        CategorizationSource.RULE if envelope_id is not None else None
+                    ),
                 )
             except ValidationError as e:
                 statement.status = FileTransferStatus.FAILED
