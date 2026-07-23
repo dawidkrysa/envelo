@@ -42,6 +42,18 @@ services:
     volumes:
       - filetransfers:${STATEMENT_UPLOAD_DIR}
 
+  frontend:
+    build:
+      context: ./frontend
+    container_name: envelo-frontend
+    restart: unless-stopped
+    ports:
+      - "8550:8550"
+    depends_on:
+      - api-gateway
+    environment:
+      API_GATEWAY_URL: http://api-gateway:8000
+
 volumes:
   filetransfers:
   pgdata:
