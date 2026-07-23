@@ -4,6 +4,12 @@ from app.db.repositories.account import (
     get_accounts,
     update_account,
 )
+from app.db.repositories.categorization_rule import (
+    create_categorization_rule,
+    delete_categorization_rule,
+    get_categorization_rules,
+    update_categorization_rule,
+)
 from app.db.repositories.category_group import (
     create_category_group,
     delete_category_group,
@@ -46,6 +52,10 @@ __all__ = [
     "create_account",
     "update_account",
     "delete_account",
+    "get_categorization_rules",
+    "create_categorization_rule",
+    "update_categorization_rule",
+    "delete_categorization_rule",
     "get_payees",
     "create_payee",
     "update_payee",

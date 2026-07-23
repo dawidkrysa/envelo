@@ -42,6 +42,9 @@ envelope_allocations_router = APIRouter(
 )
 statements_router = APIRouter(prefix="/budget/statements", tags=["Statements"])
 transactions_router = APIRouter(prefix="/budget/transactions", tags=["Transactions"])
+categorization_rules_router = APIRouter(
+    prefix="/budget/categorization-rules", tags=["Categorization Rules"]
+)
 
 
 # ==============================================================================
@@ -332,6 +335,65 @@ async def transfer_envelope_allocation_v1(
 
 
 # ==============================================================================
+# Categorization Rules
+# ==============================================================================
+
+
+# Create
+@categorization_rules_router.post(
+    "",
+    summary="Create categorization rule",
+    status_code=status.HTTP_201_CREATED,
+    response_model=schemas.CategorizationRuleRead,
+)
+async def create_categorization_rule_v1(
+    data: schemas.CategorizationRuleCreate, db: AsyncSession = Depends(get_db)
+):
+    return await repo.create_categorization_rule(db, data)
+
+
+# Read
+@categorization_rules_router.get(
+    "",
+    summary="List of all categorization rules",
+    status_code=status.HTTP_200_OK,
+    response_model=list[schemas.CategorizationRuleRead],
+)
+async def get_categorization_rules_v1(
+    skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)
+):
+    return await repo.get_categorization_rules(db, skip, limit)
+
+
+# Update
+@categorization_rules_router.put(
+    "/{categorizationRuleId}",
+    summary="Update categorization rule",
+    status_code=status.HTTP_200_OK,
+    response_model=schemas.CategorizationRuleRead,
+)
+async def update_categorization_rule_v1(
+    data: schemas.CategorizationRuleUpdate,
+    categorizationRuleId: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    return await repo.update_categorization_rule(db, categorizationRuleId, data)
+
+
+# Delete
+@categorization_rules_router.delete(
+    "/{categorizationRuleId}",
+    summary="Delete categorization rule",
+    status_code=status.HTTP_200_OK,
+    response_model=schemas.CategorizationRuleDelete,
+)
+async def delete_categorization_rule_v1(
+    categorizationRuleId: uuid.UUID, db: AsyncSession = Depends(get_db)
+):
+    return await repo.delete_categorization_rule(db, categorizationRuleId)
+
+
+# ==============================================================================
 # Statements
 # ==============================================================================
 
@@ -460,6 +522,7 @@ async def delete_transaction_v1(
 
 
 app.include_router(accounts_router)
+app.include_router(categorization_rules_router)
 app.include_router(payees_router)
 app.include_router(category_groups_router)
 app.include_router(envelopes_router)

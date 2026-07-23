@@ -1,4 +1,10 @@
 from app.schemas.account import AccountCreate, AccountDelete, AccountRead, AccountUpdate
+from app.schemas.categorization_rule import (
+    CategorizationRuleCreate,
+    CategorizationRuleDelete,
+    CategorizationRuleRead,
+    CategorizationRuleUpdate,
+)
 from app.schemas.category_group import (
     CategoryGroupCreate,
     CategoryGroupDelete,
@@ -37,6 +43,10 @@ __all__ = [
     "AccountCreate",
     "AccountUpdate",
     "AccountDelete",
+    "CategorizationRuleRead",
+    "CategorizationRuleCreate",
+    "CategorizationRuleUpdate",
+    "CategorizationRuleDelete",
     "PayeeRead",
     "PayeeCreate",
     "PayeeUpdate",
