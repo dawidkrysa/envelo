@@ -1,6 +1,8 @@
 from app.core.config import get_settings
 
 SEEDED_ACCOUNT_ID = "00000000-0000-0000-0000-000000000101"
+SEEDED_ENVELOPE_GROCERIES_ID = "00000000-0000-0000-0000-000000000401"
+SEEDED_ENVELOPE_SUBSCRIPTIONS_ID = "00000000-0000-0000-0000-000000000403"
 
 
 async def test_upload_statement_success(client):
@@ -153,3 +155,101 @@ async def test_upload_statement_partial_bad_file_creates_zero_transactions(clien
     ).json()
     imported = [t for t in transactions if t["statement_id"] == statement["id"]]
     assert imported == []
+
+
+async def test_upload_statement_applies_matching_categorization_rule(client):
+    rule_response = await client.post(
+        "/budget/categorization-rules",
+        json={"envelope_id": SEEDED_ENVELOPE_SUBSCRIPTIONS_ID, "phrase": "UBER EATS"},
+    )
+    assert rule_response.status_code == 201
+
+    response = await client.post(
+        "/budget/statements/upload",
+        data={"account_id": SEEDED_ACCOUNT_ID},
+        files={
+            "file": (
+                "feb.csv",
+                b"date,amount,description,payee\n"
+                b"2026-02-01,35.00,UBER EATS ORDER,Uber Eats\n",
+                "text/csv",
+            )
+        },
+    )
+    assert response.status_code == 201
+    statement = response.json()
+
+    transactions = (
+        await client.get(
+            "/budget/transactions", params={"accountId": SEEDED_ACCOUNT_ID}
+        )
+    ).json()
+    imported = [t for t in transactions if t["statement_id"] == statement["id"]]
+    assert len(imported) == 1
+    assert imported[0]["envelope_id"] == SEEDED_ENVELOPE_SUBSCRIPTIONS_ID
+    assert imported[0]["categorization_source"] == "rule"
+
+
+async def test_upload_statement_prefers_payee_history_over_rule(client):
+    # Seeded payee "Biedronka" already has a prior transaction categorized
+    # into the Groceries envelope (infra/postgres/seed/seed_data.sql).
+    rule_response = await client.post(
+        "/budget/categorization-rules",
+        json={
+            "envelope_id": SEEDED_ENVELOPE_SUBSCRIPTIONS_ID,
+            "phrase": "SUPERMARKET",
+        },
+    )
+    assert rule_response.status_code == 201
+
+    response = await client.post(
+        "/budget/statements/upload",
+        data={"account_id": SEEDED_ACCOUNT_ID},
+        files={
+            "file": (
+                "feb.csv",
+                b"date,amount,description,payee\n"
+                b"2026-02-02,50.00,SUPERMARKET RUN,Biedronka\n",
+                "text/csv",
+            )
+        },
+    )
+    assert response.status_code == 201
+    statement = response.json()
+
+    transactions = (
+        await client.get(
+            "/budget/transactions", params={"accountId": SEEDED_ACCOUNT_ID}
+        )
+    ).json()
+    imported = [t for t in transactions if t["statement_id"] == statement["id"]]
+    assert len(imported) == 1
+    assert imported[0]["envelope_id"] == SEEDED_ENVELOPE_GROCERIES_ID
+    assert imported[0]["categorization_source"] == "rule"
+
+
+async def test_upload_statement_without_match_leaves_transaction_uncategorized(client):
+    response = await client.post(
+        "/budget/statements/upload",
+        data={"account_id": SEEDED_ACCOUNT_ID},
+        files={
+            "file": (
+                "feb.csv",
+                b"date,amount,description,payee\n"
+                b"2026-02-03,12.00,Unrecognized purchase,Random Merchant XYZ\n",
+                "text/csv",
+            )
+        },
+    )
+    assert response.status_code == 201
+    statement = response.json()
+
+    transactions = (
+        await client.get(
+            "/budget/transactions", params={"accountId": SEEDED_ACCOUNT_ID}
+        )
+    ).json()
+    imported = [t for t in transactions if t["statement_id"] == statement["id"]]
+    assert len(imported) == 1
+    assert imported[0]["envelope_id"] is None
+    assert imported[0]["categorization_source"] is None
