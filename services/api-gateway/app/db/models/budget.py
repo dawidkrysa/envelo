@@ -3,13 +3,12 @@ from datetime import date
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Date, ForeignKey, Numeric, UniqueConstraint
-from sqlalchemy import Enum as SqlEnum
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-
 from app.db.models.base import Base
 from app.db.models.enums import AccountType, get_enum_values
 from app.db.models.mixins import TimestampMixin, UUIDPrimaryKeyMixin
+from sqlalchemy import Date, ForeignKey, Numeric, UniqueConstraint
+from sqlalchemy import Enum as SqlEnum
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if TYPE_CHECKING:
     from app.db.models.transactions import Statement, Transaction
@@ -61,6 +60,9 @@ class Envelope(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         back_populates="envelope"
     )
     transactions: Mapped[list["Transaction"]] = relationship(back_populates="envelope")
+    categorization_rules: Mapped[list["CategorizationRule"]] = relationship(
+        back_populates="envelope"
+    )
 
 
 class EnvelopeAllocation(UUIDPrimaryKeyMixin, Base):
@@ -88,3 +90,17 @@ class Payee(UUIDPrimaryKeyMixin, Base):
 
     user: Mapped["User"] = relationship(back_populates="payees")
     transactions: Mapped[list["Transaction"]] = relationship(back_populates="payee")
+
+
+class CategorizationRule(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "categorization_rules"
+    __table_args__ = {"schema": "budget"}
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("auth.users.id"), index=True)
+    envelope_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budget.envelopes.id"), index=True
+    )
+    phrase: Mapped[str] = mapped_column(index=True)
+
+    user: Mapped["User"] = relationship(back_populates="categorization_rules")
+    envelope: Mapped["Envelope"] = relationship(back_populates="categorization_rules")

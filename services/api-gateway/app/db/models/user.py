@@ -1,12 +1,17 @@
 from typing import TYPE_CHECKING
 
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-
 from app.db.models.base import Base
 from app.db.models.mixins import TimestampMixin, UUIDPrimaryKeyMixin
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if TYPE_CHECKING:
-    from app.db.models.budget import Account, CategoryGroup, Envelope, Payee
+    from app.db.models.budget import (
+        Account,
+        CategorizationRule,
+        CategoryGroup,
+        Envelope,
+        Payee,
+    )
     from app.db.models.transactions import Statement, Transaction
 
 
@@ -23,3 +28,6 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     payees: Mapped[list["Payee"]] = relationship(back_populates="user")
     statements: Mapped[list["Statement"]] = relationship(back_populates="user")
     transactions: Mapped[list["Transaction"]] = relationship(back_populates="user")
+    categorization_rules: Mapped[list["CategorizationRule"]] = relationship(
+        back_populates="user"
+    )

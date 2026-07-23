@@ -1,6 +1,7 @@
 from app.db.models.base import Base
 from app.db.models.budget import (
     Account,
+    CategorizationRule,
     CategoryGroup,
     Envelope,
     EnvelopeAllocation,
@@ -29,4 +30,5 @@ __all__ = [
     "FileFormat",
     "CategorizationSource",
     "FileTransferStatus",
+    "CategorizationRule",
 ]
