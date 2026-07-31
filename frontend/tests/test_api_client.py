@@ -1,5 +1,6 @@
-import api_client
 import httpx
+
+import api_client
 
 
 class _FakeResponse:

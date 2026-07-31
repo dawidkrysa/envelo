@@ -7,6 +7,7 @@ needs to be able to `import asgi:app`.
 """
 
 import flet as ft
-from main import main
 
-app = ft.run(main, export_asgi_app=True)
+from main import ASSETS_DIR, main
+
+app = ft.run(main, assets_dir=ASSETS_DIR, export_asgi_app=True)

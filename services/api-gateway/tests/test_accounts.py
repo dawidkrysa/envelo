@@ -1,7 +1,5 @@
 import uuid
 
-import pytest
-
 
 async def test_create_list_update_delete_account(client):
     create_response = await client.post(

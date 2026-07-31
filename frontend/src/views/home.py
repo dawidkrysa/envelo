@@ -1,18 +1,13 @@
+"""Home ("/") - the app's entry point. This static prototype has no real
+auth, so "/" simply shows the Login screen; "Sign in" moves on to the
+Dashboard."""
+
 import flet as ft
-from api_client import get_health
+
+from views.login import build_login_view
 
 
 async def build_home_view(page: ft.Page) -> ft.View:
-    connected = await get_health()
-
-    return ft.View(
-        route="/",
-        controls=[
-            ft.AppBar(title="Envelo"),
-            ft.Text(
-                "API Gateway: connected" if connected else "API Gateway: unreachable",
-                color=ft.Colors.GREEN if connected else ft.Colors.RED,
-            ),
-            ft.Button("Accounts", on_click=lambda e: page.navigate("/accounts")),
-        ],
-    )
+    view = await build_login_view(page)
+    view.route = "/"
+    return view

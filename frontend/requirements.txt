@@ -1,0 +1,5 @@
+# Exact version this component library/gallery was built and tested against.
+# The app itself is managed via pyproject.toml (uv); this file exists per the
+# design-conversion brief, which asked for a requirements.txt pinning the
+# exact Flet version used.
+flet==0.86.2
