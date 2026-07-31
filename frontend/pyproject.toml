@@ -23,12 +23,23 @@ dev = [
     # Integration testing with `flet test` / pytest. The `test` extra brings in
     # pytest, pytest-asyncio and the screenshot-comparison dependencies.
     "flet[test]>=0.86.2",
+    "ruff>=0.16",
 ]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 120
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+# Declarative UI code (long single-expression ft.Container/ft.Row trees) is
+# deliberately left unwrapped rather than force-wrapped by line length.
+ignore = ["E501"]
 
 [tool.flet]
 org = "dev.envelo"

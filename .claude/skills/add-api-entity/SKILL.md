@@ -1,0 +1,18 @@
+---
+name: add-api-entity
+description: Scaffold a new backend entity end-to-end in services/api-gateway (SQLAlchemy model, pydantic schema, repository, routes, migration) following the existing per-entity pattern. Use when adding a new database-backed resource/table to the API (e.g. "add a budgets entity", "new goals table with CRUD endpoints").
+---
+
+Add a new entity to `services/api-gateway/app/` following the pattern used by every existing entity (`categorization_rule` is a clean, small reference — read `app/db/models/budget.py:95-107`, `app/schemas/categorization_rule.py`, `app/db/repositories/categorization_rule.py`, and its routes/tests before starting). There is no `app/routers/` package — routes live directly in `app/main.py`. Work through these steps:
+
+1. **Model** — add a class to `app/db/models/budget.py` (or a more fitting file in `app/db/models/`) extending `UUIDPrimaryKeyMixin` and, if it needs `created_at`/`updated_at`, `TimestampMixin`, then `Base`. Set `__tablename__` and `__table_args__ = {"schema": "budget"}` (matching the rest of the domain — only `auth.users` lives outside this schema). Add FKs with `mapped_column(ForeignKey("budget.<table>.id"), index=True)` and matching `relationship(back_populates=...)` on both sides. Export the class from `app/db/models/__init__.py` (`__all__` too).
+
+2. **Schema** — add `app/schemas/<entity>.py` with `<Entity>Read` (all fields incl. `id`, `from_attributes=True` via `ConfigDict`), `<Entity>Create` (input fields only), `<Entity>Update` (all fields `| None = None`, for partial updates), and `<Entity>Delete` (just `id`, returned by the delete endpoint). Export all four from `app/schemas/__init__.py`.
+
+3. **Repository** — add `app/db/repositories/<entity>.py` with `async def` functions: `create_<entity>`, `get_<entity>s` (list, `skip`/`limit`, `404` if empty — matches existing convention), `update_<entity>` (fetch-or-404, apply `data.model_dump(exclude_unset=True)`, catch `IntegrityError` → `409` for bad FK refs), `delete_<entity>` (fetch-or-404, delete, return the deleted row). Each mutating function calls `await db.commit()` itself — the router does not. Use `SEED_USER_ID` from `app.db.repositories.constants` for `user_id` if the entity is user-scoped (no real auth yet).
+
+4. **Routes** — in `app/main.py`: add `<entity>s_router = APIRouter(prefix="/budget/<entities>", tags=["<Entities>"])` near the other router declarations, add the four CRUD endpoints (`POST ""`, `GET ""`, `PUT "/{<entity>Id}"`, `DELETE "/{<entity>Id}"` — path param is `camelCase` to match frontend conventions even though the function stays `snake_case`), each a thin `async def` delegating to the repository function with `response_model=schemas.<Entity>Read` (or `list[...]`/`...Delete` as appropriate), and register it with `app.include_router(<entity>s_router)` alongside the others near the bottom of the file.
+
+5. **Migration** — from `services/api-gateway`, run `alembic revision --autogenerate -m "add <entity>s table"`, then read the generated file in `migrations/versions/` to confirm it only touches what you intended (autogenerate can be noisy). Do not hand-edit `alembic_version` or its schema (`budget`, not `public`).
+
+6. **Tests** — add `tests/test_<entity>s.py` modeled on `tests/test_categorization_rules.py`: a create→list→update→delete happy path against the `client` fixture, plus a rejection case for bad FK references (expect `409`) if the entity has FKs. These run against a real Postgres via a rolled-back `SAVEPOINT` (see `tests/conftest.py`) — assume `docker compose up -d postgres` is already running rather than starting it yourself. Run with `cd services/api-gateway && pytest tests/test_<entity>s.py`.

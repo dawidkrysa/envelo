@@ -214,3 +214,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Claude Code personal instructions (not shared with the team)
+CLAUDE.local.md
