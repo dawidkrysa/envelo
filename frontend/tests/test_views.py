@@ -56,6 +56,22 @@ def find_button(root, label: str) -> ft.Container | None:
     return None
 
 
+async def _empty_list(*args, **kwargs) -> list:
+    return []
+
+
+@pytest.fixture(autouse=True)
+def stub_transactions_api(monkeypatch):
+    """`/transactions` fetches real data on build - stub it so this sweep never
+    touches the network, per this module's own no-network contract above. Patched
+    on `views.transactions`, not `api_client`, because that view does
+    `from api_client import ...`, binding its own reference at import time."""
+    monkeypatch.setattr("views.transactions.get_accounts", _empty_list)
+    monkeypatch.setattr("views.transactions.get_payees", _empty_list)
+    monkeypatch.setattr("views.transactions.get_envelopes", _empty_list)
+    monkeypatch.setattr("views.transactions.get_transactions", _empty_list)
+
+
 @pytest.mark.parametrize("route", DEMO_ROUTES)
 async def test_builder_returns_view_for_its_route(route):
     view = await VIEW_BUILDERS[route](stub_page())
@@ -133,6 +149,79 @@ async def test_action_buttons_open_a_dialog(route, label):
     # Cancel (the first action) dismisses it again.
     dialog.actions[0].on_click(None)
     assert page.opened_dialogs == []
+
+
+def _dialog_field(dialog: ft.AlertDialog, label: str) -> ft.Control:
+    """Same lookup as tests/test_dialogs.py's helper of the same purpose -
+    finds the labeled field's TextField/Dropdown, nested one level deeper for
+    a "date" field's Row(TextField, calendar-icon)."""
+    for c in walk(dialog):
+        if isinstance(c, ft.Column) and len(c.controls) >= 2:
+            first = c.controls[0]
+            if isinstance(first, ft.Text) and first.value == label.upper():
+                for inner in walk(c.controls[1]):
+                    if isinstance(inner, (ft.TextField, ft.Dropdown)):
+                        return inner
+    raise AssertionError(f"no field labeled {label!r} found in dialog")
+
+
+async def test_new_payee_resolves_by_name_after_add_transaction_refresh(monkeypatch):
+    """Regression test: creating a transaction with a brand-new payee used to
+    still show "Unknown" in the list afterwards, because `refresh_transactions`
+    re-fetched transactions but not payees, so `payees_by_id` stayed the stale
+    snapshot from the initial page load and never contained the just-created
+    payee's id."""
+    accounts = [{"id": "acc-1", "name": "Checking", "currency": "EUR"}]
+    state = {"payees": [], "transactions": []}
+
+    async def fake_get_accounts():
+        return accounts
+
+    async def fake_get_envelopes():
+        return []
+
+    async def fake_get_payees():
+        return list(state["payees"])
+
+    async def fake_get_transactions(**kwargs):
+        return list(state["transactions"])
+
+    async def fake_create_payee(name):
+        payee = {"id": "pay-new", "name": name}
+        state["payees"].append(payee)
+        return payee
+
+    async def fake_create_transaction(payload):
+        tx = {**payload, "id": "tx-new"}
+        state["transactions"].append(tx)
+        return tx
+
+    monkeypatch.setattr("views.transactions.get_accounts", fake_get_accounts)
+    monkeypatch.setattr("views.transactions.get_envelopes", fake_get_envelopes)
+    monkeypatch.setattr("views.transactions.get_payees", fake_get_payees)
+    monkeypatch.setattr("views.transactions.get_transactions", fake_get_transactions)
+    monkeypatch.setattr("api_client.create_payee", fake_create_payee)
+    monkeypatch.setattr("api_client.create_transaction", fake_create_transaction)
+
+    page = stub_page()
+    page.update = lambda: None
+    view = await VIEW_BUILDERS["/transactions"](page)
+    button = find_button(view, "Add transaction")
+    button.on_click(SimpleNamespace(control=button))
+    dialog = page.opened_dialogs[0]
+
+    _dialog_field(dialog, "Account").value = "acc-1"
+    _dialog_field(dialog, "Payee").value = "Brand New Payee"
+    _dialog_field(dialog, "Amount").value = "10"
+    _dialog_field(dialog, "Date").value = "2026-07-24"
+
+    confirm = dialog.actions[1].on_click
+    await confirm(SimpleNamespace(control=dialog.actions[1]))
+
+    assert page.opened_dialogs == []
+    payee_texts = [c.value for c in walk(view) if isinstance(c, ft.Text)]
+    assert "Brand New Payee" in payee_texts
+    assert "Unknown" not in payee_texts
 
 
 async def test_login_alt_link_toggles_between_sign_in_and_register():

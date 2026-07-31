@@ -5,6 +5,8 @@ Run with:  flet run src/gallery.py   (from the frontend/ directory)
         or: cd src && flet run gallery.py
 """
 
+import dataclasses
+
 import flet as ft
 
 from components.alert_row import AlertItem, alert_banner, alert_history_row
@@ -27,7 +29,7 @@ from components.tabs import segmented_tabs
 from components.toast import toast
 from components.toggle_switch import toggle_switch
 from components.transaction_row import transaction_card, transaction_table_row
-from mock_data import GROUPS, TRANSACTIONS, all_envelopes, envelope_view
+from mock_data import GROUPS, TRANSACTIONS, all_envelopes, envelope_name, envelope_view
 from theme import apply_theme, palette, text_style
 
 
@@ -43,16 +45,22 @@ def main(page: ft.Page) -> None:
     envelopes = all_envelopes()
     ev = envelope_view(p, envelopes[1])  # Groceries: a "warn" state example
     ev_over = envelope_view(p, next(e for e in envelopes if e.id == "gifts"))
-    tx = TRANSACTIONS[0]
+    tx = dataclasses.replace(TRANSACTIONS[0], env_id=envelope_name(TRANSACTIONS[0].env_id))
 
     def open_demo_modal(e: ft.ControlEvent) -> None:
-        dialog = build_modal(
+        dialog, _ = build_modal(
             p,
             title="Assign money",
             subtitle='Move money out of "left to assign" into an envelope.',
             fields=[
                 ModalField("Envelope", "select", options=[(g.envelopes[0].id, g.envelopes[0].name) for g in GROUPS]),
-                ModalField("Amount to assign", "input", placeholder="0,00", amount_style=True, hint="You have 137,40 € left to assign."),
+                ModalField(
+                    "Amount to assign",
+                    "input",
+                    placeholder="0,00",
+                    amount_style=True,
+                    hint="You have 137,40 € left to assign.",
+                ),
             ],
             cta_label="Assign",
             preview=("Left to assign afterwards", "137,40 €"),
@@ -137,7 +145,14 @@ def main(page: ft.Page) -> None:
                     "Page header, stat blocks",
                     ft.Row(
                         [
-                            stat_block(p, "Safe to spend", "1.842,10 €", value_size=40, value_color=p.ok_ink, note="Everyday envelopes only."),
+                            stat_block(
+                                p,
+                                "Safe to spend",
+                                "1.842,10 €",
+                                value_size=40,
+                                value_color=p.ok_ink,
+                                note="Everyday envelopes only.",
+                            ),
                             mini_stat(p, "Assigned", "520,00 €"),
                             stat_tile(p, "14", "matched a rule", fill=p.ok_fill, border=p.ok_border, ink=p.ok_ink),
                         ],
@@ -152,15 +167,26 @@ def main(page: ft.Page) -> None:
                             alert_banner(
                                 p,
                                 [
-                                    AlertItem(message="Gifts is 22,50 € over its plan", cta="Cover it", dot_color=p.over),
-                                    AlertItem(message="Groceries is at 85% — 9 days left", cta="Move money", dot_color=p.warn),
+                                    AlertItem(
+                                        message="Gifts is 22,50 € over its plan", cta="Cover it", dot_color=p.over
+                                    ),
+                                    AlertItem(
+                                        message="Groceries is at 85% — 9 days left", cta="Move money", dot_color=p.warn
+                                    ),
                                 ],
                             ),
                             bordered_panel(
                                 p,
                                 [
                                     alert_history_row(
-                                        p, AlertItem(message="", title="Gifts went 22,50 € over its plan", meta="Yesterday, 17:42 · Gifts", cta="Open", dot_color=p.over)
+                                        p,
+                                        AlertItem(
+                                            message="",
+                                            title="Gifts went 22,50 € over its plan",
+                                            meta="Yesterday, 17:42 · Gifts",
+                                            cta="Open",
+                                            dot_color=p.over,
+                                        ),
                                     )
                                 ],
                             ),
@@ -172,7 +198,15 @@ def main(page: ft.Page) -> None:
                     "Envelope row / card / flow row",
                     ft.Column(
                         [
-                            bordered_panel(p, [table_header(p, [("ENVELOPE", 2, ft.TextAlign.LEFT), ("LEFT", 1, ft.TextAlign.RIGHT)]), envelope_ledger_row(p, ev, "desktop")]),
+                            bordered_panel(
+                                p,
+                                [
+                                    table_header(
+                                        p, [("ENVELOPE", 2, ft.TextAlign.LEFT), ("LEFT", 1, ft.TextAlign.RIGHT)]
+                                    ),
+                                    envelope_ledger_row(p, ev, "desktop"),
+                                ],
+                            ),
                             ft.Row([ft.Container(content=envelope_card(p, ev_over), width=280)], wrap=True),
                             envelope_flow_row(p, ev),
                         ],
@@ -186,7 +220,16 @@ def main(page: ft.Page) -> None:
                             bordered_panel(
                                 p,
                                 [
-                                    table_header(p, [("DATE", 1, ft.TextAlign.LEFT), ("PAYEE", 2, ft.TextAlign.LEFT), ("ENVELOPE", 2, ft.TextAlign.LEFT), ("SOURCE", 1, ft.TextAlign.LEFT), ("AMOUNT", 1, ft.TextAlign.RIGHT)]),
+                                    table_header(
+                                        p,
+                                        [
+                                            ("DATE", 1, ft.TextAlign.LEFT),
+                                            ("PAYEE", 2, ft.TextAlign.LEFT),
+                                            ("ENVELOPE", 2, ft.TextAlign.LEFT),
+                                            ("SOURCE", 1, ft.TextAlign.LEFT),
+                                            ("AMOUNT", 1, ft.TextAlign.RIGHT),
+                                        ],
+                                    ),
                                     transaction_table_row(p, tx),
                                 ],
                             ),
@@ -199,8 +242,18 @@ def main(page: ft.Page) -> None:
                     "Bar charts",
                     ft.Row(
                         [
-                            flat_card(p, history_bar_chart(p, [HistoryBar("Feb", "480", 60, p.ok_fill), HistoryBar("Jul", "520", 65, p.ok)]), padding=16),
-                            flat_card(p, forecast_bar_chart(p, [ForecastGroupBar("Living", "1.900", 70, 82, p.warn)]), padding=16),
+                            flat_card(
+                                p,
+                                history_bar_chart(
+                                    p, [HistoryBar("Feb", "480", 60, p.ok_fill), HistoryBar("Jul", "520", 65, p.ok)]
+                                ),
+                                padding=16,
+                            ),
+                            flat_card(
+                                p,
+                                forecast_bar_chart(p, [ForecastGroupBar("Living", "1.900", 70, 82, p.warn)]),
+                                padding=16,
+                            ),
                         ],
                         spacing=16,
                         wrap=True,
@@ -208,7 +261,11 @@ def main(page: ft.Page) -> None:
                 ),
                 _section(
                     "Toggle switch & toast",
-                    ft.Row([toggle_switch(p, True), toast(p, "18 transactions imported")], spacing=20, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    ft.Row(
+                        [toggle_switch(p, True), toast(p, "18 transactions imported")],
+                        spacing=20,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
                 ),
                 _section("Modal dialog", secondary_button(p, "Open modal preview", open_demo_modal)),
                 _section(
