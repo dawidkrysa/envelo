@@ -11,7 +11,7 @@ def select_field(
     options: list[tuple[str, str]],
     *,
     value: str | None = None,
-    height: float = 38,
+    height: float = 40,
     width: float | None = None,
     expand: bool | int = False,
     on_select=None,
@@ -30,7 +30,16 @@ def select_field(
         height=height,
         width=width,
         expand=expand,
-        content_padding=ft.Padding.symmetric(horizontal=11),
+        # No dense=True: it shrinks Material's intrinsic decoration box on
+        # top of content_padding, leaving no slack for the brief window
+        # (each page load, before the IBM Plex Sans .ttf files finish
+        # downloading) where Flutter Web paints this fixed-height control
+        # with a fallback system font. Fallback line-height can exceed the
+        # branded font's, and a dense box clips/overlaps it until the swap
+        # reflows - this is the "co jakiś czas" glitch on refresh. The
+        # explicit vertical padding below plus the taller 40px default give
+        # enough headroom that the fallback render doesn't overflow either.
+        content_padding=ft.Padding.symmetric(horizontal=11, vertical=8),
         bgcolor=p.sf,
         border_color=p.line,
         focused_border_color=p.ok,
