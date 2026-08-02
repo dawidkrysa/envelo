@@ -60,10 +60,19 @@ async def create_payee(db: AsyncSession, data: PayeeCreate):
 async def get_or_create_payee(db: AsyncSession, name: str) -> Payee:
     normalized_name = name.strip()
 
+    # `.first()` with an explicit order, not `.scalar_one_or_none()`: there is no
+    # unique constraint on `payees.name`, so two payees can legitimately share
+    # one. `scalar_one_or_none()` raised MultipleResultsFound on that, turning a
+    # duplicate name - data the schema allows - into a 500 for every statement
+    # import that mentioned it. Oldest wins, so repeated imports keep resolving
+    # to the same payee instead of drifting between them.
     result = await db.execute(
-        select(Payee).where(func.lower(Payee.name) == normalized_name.lower())
+        select(Payee)
+        .where(func.lower(Payee.name) == normalized_name.lower())
+        .order_by(Payee.id)
+        .limit(1)
     )
-    payee = result.scalar_one_or_none()
+    payee = result.scalars().first()
     if payee is not None:
         return payee
 

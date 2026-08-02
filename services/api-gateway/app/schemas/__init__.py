@@ -23,6 +23,7 @@ from app.schemas.envelope_allocation import (
     EnvelopeAllocationRead,
     EnvelopeAllocationTransfer,
     EnvelopeAllocationUpdate,
+    ToAssignRead,
 )
 from app.schemas.payee import PayeeCreate, PayeeDelete, PayeeRead, PayeeUpdate
 from app.schemas.statement import (
@@ -32,6 +33,7 @@ from app.schemas.statement import (
     StatementUpdate,
 )
 from app.schemas.transaction import (
+    EnvelopeSpentRead,
     TransactionCreate,
     TransactionDelete,
     TransactionRead,
@@ -64,11 +66,13 @@ __all__ = [
     "EnvelopeAllocationUpdate",
     "EnvelopeAllocationDelete",
     "EnvelopeAllocationTransfer",
+    "ToAssignRead",
     "StatementRead",
     "StatementCreate",
     "StatementUpdate",
     "StatementDelete",
     "TransactionRead",
+    "EnvelopeSpentRead",
     "TransactionCreate",
     "TransactionUpdate",
     "TransactionDelete",
