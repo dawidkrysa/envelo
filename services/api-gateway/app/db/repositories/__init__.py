@@ -25,6 +25,7 @@ from app.db.repositories.envelope import (
 from app.db.repositories.envelope_allocation import (
     create_envelope_allocation,
     get_envelope_allocations,
+    get_to_assign,
     transfer_envelope_allocation,
     update_envelope_allocation,
 )
@@ -41,8 +42,10 @@ from app.db.repositories.statement import (
     update_statement,
 )
 from app.db.repositories.transaction import (
+    count_transactions,
     create_transaction,
     delete_transaction,
+    get_spent_by_envelope,
     get_transactions,
     update_transaction,
 )
@@ -72,11 +75,14 @@ __all__ = [
     "create_envelope_allocation",
     "update_envelope_allocation",
     "transfer_envelope_allocation",
+    "get_to_assign",
     "get_statements",
     "create_statement",
     "update_statement",
     "delete_statement",
     "get_transactions",
+    "count_transactions",
+    "get_spent_by_envelope",
     "create_transaction",
     "update_transaction",
     "delete_transaction",

@@ -77,6 +77,7 @@ class EnvelopeAllocation(UUIDPrimaryKeyMixin, Base):
     )
     month: Mapped[date] = mapped_column(Date)
     assigned_amount: Mapped[Decimal] = mapped_column(Numeric)
+    target_amount: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
 
     envelope: Mapped["Envelope"] = relationship(back_populates="envelope_allocations")
 

@@ -2,14 +2,14 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from app.db.models import EnvelopeAllocation
+from app.db.models import EnvelopeAllocation, Transaction
 from app.schemas.envelope_allocation import (
     EnvelopeAllocationCreate,
     EnvelopeAllocationTransfer,
     EnvelopeAllocationUpdate,
 )
 from fastapi import HTTPException
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -66,6 +66,12 @@ async def create_envelope_allocation(db: AsyncSession, data: EnvelopeAllocationC
         )
     await db.refresh(envelope_allocation)
     return envelope_allocation
+
+
+async def get_to_assign(db: AsyncSession) -> Decimal:
+    total_transactions = await db.scalar(select(func.sum(Transaction.amount)))
+    total_assigned = await db.scalar(select(func.sum(EnvelopeAllocation.assigned_amount)))
+    return (total_transactions or Decimal("0")) - (total_assigned or Decimal("0"))
 
 
 async def get_or_build_envelope_allocation(

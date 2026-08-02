@@ -8,7 +8,9 @@ from components.bar_chart import ForecastGroupBar, forecast_bar_chart
 from components.card import flat_card
 from components.page_header import page_header
 from components.stat_display import mini_stat, stat_block
-from mock_data import DAYS_LEFT, GROUPS, MONTH, all_envelopes, format_money, format_short
+from currency import format_money, format_short
+from dates import days_left_label, month_elapsed_fraction, month_label
+from mock_data import GROUPS, all_envelopes
 from theme import palette, text_style
 from views.common import app_shell, page_band
 
@@ -17,7 +19,10 @@ async def build_forecast_view(page: ft.Page) -> ft.View:
     p = palette(page)
     band = page_band(page)
 
-    rate = (31 - DAYS_LEFT) / 31
+    # Share of the month already gone: month-to-date spending divided by this
+    # is the straight-line month-end projection. Was hardcoded to a 31-day
+    # month, which over-projected every February by ~10%.
+    rate = month_elapsed_fraction()
     envelopes = all_envelopes()
 
     def projected(e) -> float:
@@ -130,8 +135,8 @@ async def build_forecast_view(page: ft.Page) -> ft.View:
     )
 
     body: list[ft.Control] = [
-        page_header(p, "Forecast", eyebrow_segments=[MONTH, f"{DAYS_LEFT} days left"]),
+        page_header(p, "Forecast", eyebrow_segments=[month_label(), days_left_label()]),
         charts_row,
     ]
 
-    return app_shell(page, "/forecast", "forecast", body)
+    return await app_shell(page, "/forecast", "forecast", body)

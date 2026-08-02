@@ -1,9 +1,8 @@
 """Settings - `isSettings` in the design: alert threshold, notification
 channel, currency, appearance and sign-out.
 
-The threshold slider and the appearance switch are real (their own visual
-state, per the brief); currency/notification selects render with their
-default value but are not wired to anything else on the screen.
+Currency and appearance are real and persist; the threshold slider keeps its own
+visual state per the brief, and the notification select is still decorative.
 """
 
 import flet as ft
@@ -13,6 +12,7 @@ from components.card import flat_card
 from components.page_header import page_header
 from components.select_field import select_field
 from components.toggle_switch import toggle_switch
+from currency import CURRENCIES, CURRENCY_STORAGE_KEY, current_currency, set_currency
 from theme import palette, text_style
 from views.common import app_shell
 
@@ -64,6 +64,19 @@ async def build_settings_view(page: ft.Page) -> ft.View:
         else:
             page.update()
 
+    async def on_currency_change(e: ft.ControlEvent) -> None:
+        # Same full-rebuild trick as the theme toggle above, for the same reason:
+        # every screen formats its amounts once at build time, so flipping the
+        # currency has no effect on anything already on screen until the route is
+        # rebuilt. Persisted so the choice survives a reload - there is no
+        # user-settings table on the backend, so this stays client-side.
+        set_currency(e.control.value)
+        await page.shared_preferences.set(CURRENCY_STORAGE_KEY, current_currency())
+        if page.on_route_change:
+            await page.on_route_change(e)
+        else:
+            page.update()
+
     def settings_row(label: str, hint: str, control: ft.Control) -> ft.Container:
         return flat_card(
             p,
@@ -97,15 +110,10 @@ async def build_settings_view(page: ft.Page) -> ft.View:
             "Used for every amount in Envelo.",
             select_field(
                 p,
-                [
-                    ("eur-eu", "Euro — 1.234,56 €"),
-                    ("eur-us", "Euro — 1,234.56 €"),
-                    ("usd", "US dollar — $1,234.56"),
-                    ("gbp", "Pound — £1,234.56"),
-                    ("pln", "Złoty — 1 234,56 zł"),
-                ],
-                value="eur-eu",
-                width=210,
+                [(code, cf.label) for code, cf in CURRENCIES.items()],
+                value=current_currency(),
+                width=230,
+                on_select=on_currency_change,
             ),
         ),
         settings_row(
@@ -135,8 +143,8 @@ async def build_settings_view(page: ft.Page) -> ft.View:
     ]
 
     body: list[ft.Control] = [
-        page_header(p, "Settings", eyebrow_segments=["Maartje Kuipers · maartje@kuipers.nl"]),
+        page_header(p, "Settings", eyebrow_segments=["Dawid Krysa · dawid@envelo.local"]),
         ft.Column([threshold_card, *rows], spacing=11, width=660),
     ]
 
-    return app_shell(page, "/settings", "settings", body)
+    return await app_shell(page, "/settings", "settings", body)

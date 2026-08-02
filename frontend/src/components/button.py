@@ -24,9 +24,10 @@ def _button(
     color: str,
     weight: int,
     on_click: Callable[[ft.ControlEvent], None] | None,
-    height: float = 38,
+    height: float = 40,
     padding_x: float = 15,
     expand: bool = False,
+    opacity: float = 1.0,
 ) -> ft.Container:
     return ft.Container(
         content=_label_control(label, text_style(13.5, weight, color)),
@@ -36,9 +37,11 @@ def _button(
         height=height,
         padding=ft.Padding.symmetric(horizontal=padding_x),
         alignment=ft.Alignment.CENTER,
-        ink=True,
+        # No ink ripple on a button that does nothing.
+        ink=on_click is not None,
         on_click=on_click,
         expand=expand,
+        opacity=opacity,
         animate=ft.Animation(120, ft.AnimationCurve.EASE_OUT),
     )
 
@@ -48,7 +51,7 @@ def primary_button(
     label: str | ft.Control,
     on_click: Callable[[ft.ControlEvent], None] | None = None,
     expand: bool = False,
-    height: float = 38,
+    height: float = 40,
 ) -> ft.Container:
     return _button(
         label,
@@ -68,18 +71,24 @@ def secondary_button(
     label: str | ft.Control,
     on_click: Callable[[ft.ControlEvent], None] | None = None,
     expand: bool = False,
-    height: float = 38,
+    height: float = 40,
+    active: bool = False,
+    disabled: bool = False,
 ) -> ft.Container:
+    """`disabled` greys the button out *and* drops its handler, so an unavailable
+    action cannot be triggered by a stray click - used by the Transactions pager
+    at the first and last page."""
     return _button(
         label,
-        bgcolor=p.sf,
-        border_color=p.line2,
-        color=p.ink,
-        weight=500,
-        on_click=on_click,
+        bgcolor=p.brand if active else p.sf,
+        border_color=p.brand if active else p.line2,
+        color=p.on_brand if active else (p.ink3 if disabled else p.ink),
+        weight=600 if active else 500,
+        on_click=None if disabled else on_click,
         padding_x=15,
         expand=expand,
         height=height,
+        opacity=0.5 if disabled else 1.0,
     )
 
 

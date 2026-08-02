@@ -1,63 +1,32 @@
 """Transactions - `isTransactions` in the design: search/filter row and the
 transaction table (desktop) / stacked cards (mobile), backed by the real API.
 
-Account/envelope/range filters re-fetch from the API Gateway on change; the
-free-text search box has no backend equivalent to filter by, so it filters
-client-side over whatever the current server-side filters already fetched.
+Every filter - including the free-text search - is applied by the API Gateway,
+and the table shows one page of the result at a time. Nothing is filtered
+client-side: the screen only ever holds 50 of what may be thousands of rows, so
+filtering here would answer "which of these 50 match" rather than "which of my
+transactions match".
 """
 
-import calendar
-from datetime import date
+import asyncio
+from collections.abc import Callable
 
 import flet as ft
 
-from api_client import get_accounts, get_envelopes, get_payees, get_transactions
-from components.button import primary_button
+from api_client import get_accounts, get_envelopes, get_payees, get_transactions_page
+from components.button import primary_button, secondary_button
 from components.card import bordered_panel
 from components.input_field import text_input
 from components.page_header import page_header
 from components.select_field import select_field
 from components.table_header import table_header
 from components.transaction_row import transaction_card, transaction_table_row
-from mock_data import Transaction, format_money
+from currency import format_money
+from mock_data import Transaction
 from theme import palette, text_style
+from utils import range_to_dates, to_transaction
 from views.common import app_shell, page_band
 from views.dialogs import new_transaction_dialog
-
-
-def _shift_months(d: date, months: int) -> date:
-    total = d.month - 1 + months
-    year = d.year + total // 12
-    month = total % 12 + 1
-    last_day = calendar.monthrange(year, month)[1]
-    return date(year, month, min(d.day, last_day))
-
-
-def _range_to_dates(s: str) -> tuple[date, date]:
-    current = date.today()
-    year = current.year
-    month = current.month
-    last_day = calendar.monthrange(year, month)[1]
-    match s:
-        case "this":
-            return (date(year, month, 1), date(year, month, last_day))
-        case "last3":
-            return (_shift_months(current, -3), current)
-        case "year":
-            return (_shift_months(current, -12), current)
-    return (date(year, month, 1), date(year, month, last_day))
-
-
-def _to_transaction(t: dict, payees_by_id: dict, envelopes_by_id: dict, accounts_by_id: dict) -> Transaction:
-    return Transaction(
-        id=t["id"],
-        date=t["transaction_date"],
-        payee=payees_by_id.get(t["payee_id"], "Unknown"),
-        env_id=envelopes_by_id.get(t["envelope_id"], "Uncategorized"),
-        account=accounts_by_id.get(t["account_id"], "Unknown"),
-        amount=float(t["amount"]),
-        source=t["categorization_source"] or "manual",
-    )
 
 
 def _empty_state(p) -> ft.Container:
@@ -78,8 +47,43 @@ def _empty_state(p) -> ft.Container:
     )
 
 
-def _loading_rows(p, count: int = 6) -> ft.Container:
-    rows = []
+# How long a refresh may run before the dimmed table is replaced by a skeleton.
+# Long enough that a local API never reaches it, short enough that a slow one
+# does not leave the screen looking stuck.
+_SKELETON_AFTER_S = 0.25
+
+# Rows per page. Flet has no list virtualisation - every row is a control sent to
+# the client - so this is what actually bounds the screen's cost, no matter how
+# much history the database holds.
+_PAGE_SIZE = 50
+
+# How long to wait after the last keystroke before searching. `on_change` fires
+# per character and search is a server round trip, so without this a six-letter
+# payee name is six queries, five of them already obsolete.
+_SEARCH_DEBOUNCE_S = 0.3
+
+
+def _table_columns(band: str) -> list[tuple[str, int, ft.TextAlign]]:
+    columns = [
+        ("DATE", 1, ft.TextAlign.LEFT),
+        ("PAYEE", 2, ft.TextAlign.LEFT),
+        ("ENVELOPE", 2, ft.TextAlign.LEFT),
+    ]
+    if band == "desktop":
+        columns.append(("ACCOUNT", 1, ft.TextAlign.LEFT))
+    columns += [("SOURCE", 1, ft.TextAlign.LEFT), ("AMOUNT", 1, ft.TextAlign.RIGHT)]
+    return columns
+
+
+def _loading_rows(p, band: str, count: int) -> ft.Container:
+    """Placeholder rows for a fetch slow enough to be worth acknowledging.
+
+    Carries the real `table_header` and takes its row count from what is already
+    on screen, so swapping it in does not resize the panel. A skeleton with a
+    fixed height is worse than no skeleton: it collapses a long table to a stub
+    and grows it back, which reads as the page jumping rather than loading.
+    """
+    rows: list[ft.Control] = [] if band == "mobile" else [table_header(p, _table_columns(band))]
     for _ in range(count):
         rows.append(
             ft.Container(
@@ -101,46 +105,82 @@ def _loading_rows(p, count: int = 6) -> ft.Container:
 async def build_transactions_view(page: ft.Page) -> ft.View:
     p = palette(page)
     band = page_band(page)
-    state = {"account_id": "all", "envelope_id": "all", "range": "this", "search": ""}
+    state = {"account_id": "all", "envelope_id": "all", "range": "this", "search": "", "page": 0}
 
-    payees = await get_payees()
-    accounts = await get_accounts()
-    transactions = await get_transactions()
-    envelopes = await get_envelopes()
+    # Concurrently: two independent lookups the filter dropdowns need before
+    # anything can render.
+    accounts, envelopes = await asyncio.gather(get_accounts(), get_envelopes())
 
     account_options = [("all", "All accounts")] + [(a["id"], a["name"]) for a in accounts]
     envelope_options = [("all", "All envelopes")] + [(e["id"], e["name"]) for e in envelopes]
     range_options = [("this", "This month"), ("last3", "Last 3 months"), ("year", "This year")]
 
-    payees_by_id = {p["id"]: p["name"] for p in payees}
     accounts_by_id = {a["id"]: a["name"] for a in accounts}
     envelopes_by_id = {e["id"]: e["name"] for e in envelopes}
 
-    rows_data = [_to_transaction(t, payees_by_id, envelopes_by_id, accounts_by_id) for t in transactions]
+    # Filled by `_fetch_rows()` below, which is also what every filter change
+    # calls - the screen has exactly one way of deciding which transactions it is
+    # showing. It used to load with a bare `get_transactions()` while the range
+    # dropdown already read "This month", so the table opened showing every
+    # transaction ever and the first touch of *any* filter silently applied the
+    # date range too. Picking an account looked like it also changed the period.
+    payees: list[dict] = []
+    payees_by_id: dict[str, str] = {}
+    rows_data: list[Transaction] = []
+    # How many match the current filters, from the server. `rows_data` only ever
+    # holds one page of them.
+    total = 0
 
-    def on_account_select(e: ft.ControlEvent) -> None:
-        state["account_id"] = e.control.value
-        page.run_task(refresh_transactions)
+    def _refilter(key: str) -> Callable[[ft.ControlEvent], None]:
+        """Apply a filter and go back to page 1.
 
-    def on_envelope_select(e: ft.ControlEvent) -> None:
-        state["envelope_id"] = e.control.value
-        page.run_task(refresh_transactions)
+        Staying on page 4 while narrowing the results lands the user past the end
+        of the new result set, which looks like the filter returned nothing."""
 
-    def on_range_select(e: ft.ControlEvent) -> None:
-        state["range"] = e.control.value
-        page.run_task(refresh_transactions)
+        def handler(e: ft.ControlEvent) -> None:
+            state[key] = e.control.value
+            state["page"] = 0
+            page.run_task(refresh_transactions)
+
+        return handler
+
+    on_account_select = _refilter("account_id")
+    on_envelope_select = _refilter("envelope_id")
+    on_range_select = _refilter("range")
+
+    def _go_to_page(delta: int) -> Callable[[ft.ControlEvent], None]:
+        def handler(e: ft.ControlEvent) -> None:
+            state["page"] = max(0, min(state["page"] + delta, _last_page()))
+            page.run_task(refresh_transactions)
+
+        return handler
+
+    def _last_page() -> int:
+        return max(0, (total - 1) // _PAGE_SIZE)
 
     def on_search_change(e: ft.ControlEvent) -> None:
         state["search"] = e.control.value
-        render_summary()
-        render_list()
-        page.update()
+        state["page"] = 0
+        page.run_task(_search_after_typing_stops, e.control.value)
+
+    async def _search_after_typing_stops(typed: str) -> None:
+        """Search is a server round trip now, and `on_change` fires per keystroke -
+        so wait out the typing instead of querying per character.
+
+        `typed` is passed in rather than read from `state` here: by the time these
+        tasks actually run, `state["search"]` already holds the *last* keystroke,
+        so every one of them would see itself as current and fire. Comparing the
+        value captured when the task was scheduled is what makes the superseded
+        ones return quietly - they are not cancelled, just made harmless."""
+        await asyncio.sleep(_SEARCH_DEBOUNCE_S)
+        if state["search"] != typed:
+            return
+        await refresh_transactions()
 
     def visible_rows() -> list[Transaction]:
-        query = state["search"].strip().lower()
-        if not query:
-            return rows_data
-        return [t for t in rows_data if query in t.payee.lower() or query in format_money(t.amount).lower()]
+        # Whatever the server sent back: the search is part of the query now, so
+        # there is nothing left to filter out here.
+        return rows_data
 
     # Search absorbs whatever width the three (natural-sized, un-expanded)
     # dropdowns don't need - expand=True on the search field only, not on
@@ -157,12 +197,13 @@ async def build_transactions_view(page: ft.Page) -> ft.View:
     # width shortage).
     filters_row = ft.Row(
         [
-            text_input(p, placeholder="Search payee or amount", expand=True, on_change=on_search_change),
+            text_input(p, placeholder="Search payee, description or amount", expand=True, on_change=on_search_change),
             select_field(p, account_options, value="all", on_select=on_account_select),
             select_field(p, envelope_options, value="all", on_select=on_envelope_select),
             select_field(p, range_options, value="this", on_select=on_range_select),
         ],
         spacing=9,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
     )
 
     summary_holder = ft.Container()
@@ -170,15 +211,46 @@ async def build_transactions_view(page: ft.Page) -> ft.View:
     def render_summary() -> None:
         visible = visible_rows()
         net = sum(t.amount for t in visible)
+        if total == 0:
+            label = "No transactions match" if state["search"].strip() else "No transactions"
+        else:
+            first = state["page"] * _PAGE_SIZE + 1
+            label = f"{first}–{first + len(rows_data) - 1} of {total} transactions"
         summary_holder.content = ft.Row(
             [
-                ft.Text(f"{len(visible)} of {len(rows_data)} transactions", style=text_style(12.5, 400, p.ink3)),
+                ft.Text(label, style=text_style(12.5, 400, p.ink3)),
                 ft.Text(f"Net {format_money(net)}", style=text_style(12.5, 500, p.ink2)),
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
         )
 
-    list_holder = ft.Container()
+    pager_holder = ft.Container()
+
+    def render_pager() -> None:
+        """Prev/next plus which page of how many.
+
+        Hidden entirely when everything fits on one page - a pager that can never
+        do anything is just noise above the table."""
+        if total <= _PAGE_SIZE:
+            pager_holder.content = None
+            return
+        current, last = state["page"], _last_page()
+        pager_holder.content = ft.Row(
+            [
+                ft.Text(f"Page {current + 1} of {last + 1}", style=text_style(12.5, 400, p.ink3)),
+                ft.Row(
+                    [
+                        secondary_button(p, "← Previous", _go_to_page(-1), disabled=current == 0),
+                        secondary_button(p, "Next →", _go_to_page(1), disabled=current >= last),
+                    ],
+                    spacing=8,
+                ),
+            ],
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
+    list_holder = ft.Container(animate_opacity=ft.Animation(140, ft.AnimationCurve.EASE_OUT))
 
     def render_list() -> None:
         visible = visible_rows()
@@ -187,15 +259,7 @@ async def build_transactions_view(page: ft.Page) -> ft.View:
         elif band == "mobile":
             list_holder.content = ft.Column([transaction_card(p, t) for t in visible], spacing=9)
         else:
-            columns = [
-                ("DATE", 1, ft.TextAlign.LEFT),
-                ("PAYEE", 2, ft.TextAlign.LEFT),
-                ("ENVELOPE", 2, ft.TextAlign.LEFT),
-            ]
-            if band == "desktop":
-                columns.append(("ACCOUNT", 1, ft.TextAlign.LEFT))
-            columns += [("SOURCE", 1, ft.TextAlign.LEFT), ("AMOUNT", 1, ft.TextAlign.RIGHT)]
-            rows: list[ft.Control] = [table_header(p, columns)]
+            rows: list[ft.Control] = [table_header(p, _table_columns(band))]
             for t in visible:
                 rows.append(
                     transaction_table_row(
@@ -204,35 +268,65 @@ async def build_transactions_view(page: ft.Page) -> ft.View:
                 )
             list_holder.content = bordered_panel(p, rows)
 
-    async def refresh_transactions() -> None:
-        list_holder.content = _loading_rows(p)
-        page.update()
-
+    async def _fetch_rows() -> None:
         # Also used as `new_transaction_dialog`'s on_created callback, which can
         # have just created a brand-new payee - re-fetch so its name resolves
         # instead of falling back to "Unknown", and so a second "Add
         # transaction" in the same session sees it too (avoiding a duplicate
         # payee, which is the exact thing the match-before-create logic in
         # dialogs.py exists to prevent).
-        nonlocal payees, payees_by_id
-        payees = await get_payees()
-        payees_by_id = {pe["id"]: pe["name"] for pe in payees}
-
-        date_from, date_to = _range_to_dates(state["range"])
-        raw = await get_transactions(
-            account_id=None if state["account_id"] == "all" else state["account_id"],
-            envelope_id=None if state["envelope_id"] == "all" else state["envelope_id"],
-            date_from=date_from,
-            date_to=date_to,
+        nonlocal payees, payees_by_id, rows_data, total
+        date_from, date_to = range_to_dates(state["range"])
+        payees, (raw, total) = await asyncio.gather(
+            get_payees(),
+            get_transactions_page(
+                account_id=None if state["account_id"] == "all" else state["account_id"],
+                envelope_id=None if state["envelope_id"] == "all" else state["envelope_id"],
+                date_from=date_from,
+                date_to=date_to,
+                search=state["search"],
+                skip=state["page"] * _PAGE_SIZE,
+                limit=_PAGE_SIZE,
+            ),
         )
-        nonlocal rows_data
-        rows_data = [_to_transaction(t, payees_by_id, envelopes_by_id, accounts_by_id) for t in raw]
-        render_summary()
-        render_list()
+        payees_by_id = {pe["id"]: pe["name"] for pe in payees}
+        rows_data = [to_transaction(t, payees_by_id, envelopes_by_id, accounts_by_id) for t in raw]
+
+    async def refresh_transactions() -> None:
+        """Re-fetch for the current filters without the table jumping.
+
+        The list is dimmed in place first, not replaced. Swapping straight to a
+        skeleton meant a 20-row table collapsed to a fixed 6-row stub and grew
+        back again - and against a local API that whole cycle happens inside one
+        or two frames, so it reads as a flicker, not as loading. Dimming changes
+        no layout at all, so nothing on the page moves.
+
+        The skeleton still exists for the case it was meant for: a fetch slow
+        enough that a dimmed table looks frozen. It is only swapped in once the
+        request has been running past `_SKELETON_AFTER_S`, and it is sized to the
+        rows currently on screen so even that swap keeps the panel's height.
+        """
+        list_holder.opacity = 0.4
         page.update()
 
+        fetch = asyncio.ensure_future(_fetch_rows())
+        done, _ = await asyncio.wait({fetch}, timeout=_SKELETON_AFTER_S)
+        if not done:
+            list_holder.content = _loading_rows(p, band, count=max(len(visible_rows()), 3))
+            list_holder.opacity = 1
+            page.update()
+        await fetch
+
+        render_summary()
+        render_list()
+        render_pager()
+        list_holder.opacity = 1
+        page.update()
+
+    await _fetch_rows()
     render_summary()
     render_list()
+    render_pager()
 
     body: list[ft.Control] = [
         page_header(
@@ -258,6 +352,7 @@ async def build_transactions_view(page: ft.Page) -> ft.View:
         filters_row,
         summary_holder,
         list_holder,
+        pager_holder,
     ]
 
-    return app_shell(page, "/transactions", "transactions", body)
+    return await app_shell(page, "/transactions", "transactions", body)

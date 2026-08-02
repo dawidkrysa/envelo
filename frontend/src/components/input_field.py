@@ -3,7 +3,8 @@ fields and the ledger's inline assign-amount field with a currency suffix."""
 
 import flet as ft
 
-from theme import RADIUS_BUTTON, Palette, text_style
+from currency import symbol
+from theme import CONTROL_HEIGHT, RADIUS_BUTTON, Palette, text_style
 
 
 def text_input(
@@ -11,7 +12,7 @@ def text_input(
     *,
     value: str = "",
     placeholder: str | None = None,
-    height: float = 38,
+    height: float = CONTROL_HEIGHT,
     size: float = 13.5,
     weight: int = 400,
     text_align: ft.TextAlign = ft.TextAlign.LEFT,
@@ -43,9 +44,23 @@ def text_input(
     )
 
 
-def amount_input(p: Palette, *, value: str = "", currency_symbol: str = "€", height: float = 34) -> ft.Stack:
+def amount_input(
+    p: Palette,
+    *,
+    value: str = "",
+    currency_symbol: str | None = None,
+    height: float = 34,
+    on_blur: object = None,
+    on_submit: object = None,
+) -> ft.Stack:
     """Ledger row's right-aligned assign field with a pinned currency glyph,
-    e.g. `118,00` with a trailing " €" that never moves as you type."""
+    e.g. `118,00` with a trailing ` zł` that never moves as you type.
+
+    `currency_symbol` defaults to the currently selected currency's glyph. It is
+    resolved here rather than in the signature because a default argument is
+    evaluated once at import, which would freeze the app on whatever currency
+    happened to be selected first.
+    """
     field = ft.TextField(
         value=value,
         text_align=ft.TextAlign.RIGHT,
@@ -58,13 +73,20 @@ def amount_input(p: Palette, *, value: str = "", currency_symbol: str = "€", h
         border_radius=RADIUS_BUTTON,
         border_width=1,
         width=118,
+        on_blur=on_blur,
+        on_submit=on_submit,
     )
-    suffix = ft.Container(
-        content=ft.Text(currency_symbol, style=text_style(13, 400, p.ink2)),
-        alignment=ft.Alignment.CENTER_RIGHT,
-        padding=ft.Padding.only(right=10),
-        height=height,
-        width=118,
+    # Wrapped in a TransparentPointer: this container covers the whole field, and
+    # the glyph's own text render box hit-tests, so without it a tap landing on
+    # the symbol is swallowed here instead of focusing the field underneath.
+    suffix = ft.TransparentPointer(
+        content=ft.Container(
+            content=ft.Text(currency_symbol or symbol(), style=text_style(13, 400, p.ink2)),
+            alignment=ft.Alignment.CENTER_RIGHT,
+            padding=ft.Padding.only(right=10),
+            height=height,
+            width=118,
+        )
     )
     return ft.Stack([field, suffix])
 

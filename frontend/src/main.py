@@ -2,6 +2,7 @@ from pathlib import Path
 
 import flet as ft
 
+from currency import CURRENCY_STORAGE_KEY, DEFAULT_CURRENCY, set_currency
 from routing import build_view, stack_for_route
 from theme import apply_theme, layout_band
 
@@ -17,8 +18,25 @@ from theme import apply_theme, layout_band
 ASSETS_DIR = str(Path(__file__).parent / "assets")
 
 
+async def _restore_currency(page: ft.Page) -> None:
+    """Load the currency saved by the Settings screen before anything renders.
+
+    Every screen formats its amounts at build time, so this has to happen before
+    the first `route_change()` or the app would paint once in the default currency
+    and only switch on the next navigation. Failures are swallowed: shared
+    preferences are unavailable in some hosts (and in tests), and an unreadable
+    preference is not a reason to refuse to start.
+    """
+    try:
+        saved = await page.shared_preferences.get(CURRENCY_STORAGE_KEY)
+    except Exception:
+        saved = None
+    set_currency(saved if isinstance(saved, str) else DEFAULT_CURRENCY)
+
+
 async def main(page: ft.Page):
     page.title = "Envelo"
+    await _restore_currency(page)
     apply_theme(page)
 
     async def route_change(e=None):

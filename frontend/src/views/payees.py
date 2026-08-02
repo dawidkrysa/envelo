@@ -6,7 +6,8 @@ import flet as ft
 from components.button import link_button
 from components.card import bordered_panel
 from components.page_header import page_header
-from mock_data import PAYEES, format_money
+from currency import format_money
+from mock_data import PAYEES
 from theme import palette, text_style
 from views.common import app_shell
 
@@ -60,4 +61,4 @@ async def build_payees_view(page: ft.Page) -> ft.View:
         bordered_panel(p, rows),
     ]
 
-    return app_shell(page, "/payees", "payees", body)
+    return await app_shell(page, "/payees", "payees", body)

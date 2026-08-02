@@ -28,6 +28,17 @@ class TransactionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class EnvelopeSpentRead(BaseModel):
+    """One envelope's money out over a period, as returned by
+    `GET /budget/transactions/spent-by-envelope`. Positive: it is an amount
+    spent, not a signed balance."""
+
+    envelope_id: uuid.UUID
+    spent: Decimal
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class TransactionCreate(BaseModel):
     account_id: uuid.UUID
     envelope_id: uuid.UUID | None = None

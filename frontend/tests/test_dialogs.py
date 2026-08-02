@@ -3,7 +3,8 @@ from types import SimpleNamespace
 import flet as ft
 import pytest
 
-from views.dialogs import _parse_amount, _parse_date, new_transaction_dialog
+from utils import parse_amount, parse_date
+from views.dialogs import new_transaction_dialog
 
 
 def _stub_page() -> SimpleNamespace:
@@ -44,32 +45,23 @@ def _field_control(dialog: ft.AlertDialog, label: str) -> ft.Control:
     raise AssertionError(f"no field labeled {label!r} found in dialog")
 
 
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        ("42,50", "42.50"),
-        ("-42,50", "-42.50"),
-        ("1.234,56", "1234.56"),
-        ("42", "42"),
-        (" 42,50 ", "42.50"),
-    ],
-)
-def test_parse_amount_accepts_eu_formatted_numbers(raw, expected):
-    assert _parse_amount(raw) == expected
-
-
-@pytest.mark.parametrize("raw", ["", "   ", "0", "0,00", "abc", "42,5,0", "--5"])
-def test_parse_amount_rejects_empty_zero_and_malformed_input(raw):
-    assert _parse_amount(raw) is None
+# `parse_amount` itself is covered in tests/test_utils.py. What matters here is
+# that each dialog applies its own rule on top of it: zero parses fine now (an
+# envelope can be un-assigned), so any dialog for which zero is meaningless has
+# to reject it explicitly.
+@pytest.mark.parametrize("raw", ["0", "0,00"])
+def test_parse_amount_accepts_zero_so_dialogs_must_guard_it(raw):
+    assert parse_amount(raw) is not None
+    assert float(parse_amount(raw)) == 0
 
 
 def test_parse_date_accepts_iso_format():
-    assert _parse_date("2026-07-24") == "2026-07-24"
+    assert parse_date("2026-07-24") == "2026-07-24"
 
 
 @pytest.mark.parametrize("raw", ["", "24-07-2026", "2026/07/24", "not a date"])
 def test_parse_date_rejects_invalid_input(raw):
-    assert _parse_date(raw) is None
+    assert parse_date(raw) is None
 
 
 _ACCOUNTS = [{"id": "acc-1", "name": "Checking", "currency": "EUR"}]

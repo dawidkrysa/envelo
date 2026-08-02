@@ -27,7 +27,11 @@ async def test_upload_statement_success(client):
 
     transactions = (
         await client.get(
-            "/budget/transactions", params={"accountId": SEEDED_ACCOUNT_ID}
+            "/budget/transactions",
+            # Scoped to the window the fixture CSVs use. `GET /budget/transactions`
+            # returns one page of the newest rows, so an unscoped lookup only found
+            # these while the database happened to be nearly empty.
+            params={"accountId": SEEDED_ACCOUNT_ID, "dateFrom": "2026-01-01", "dateTo": "2026-02-28"},
         )
     ).json()
     imported = [t for t in transactions if t["statement_id"] == statement["id"]]
@@ -150,7 +154,11 @@ async def test_upload_statement_partial_bad_file_creates_zero_transactions(clien
 
     transactions = (
         await client.get(
-            "/budget/transactions", params={"accountId": SEEDED_ACCOUNT_ID}
+            "/budget/transactions",
+            # Scoped to the window the fixture CSVs use. `GET /budget/transactions`
+            # returns one page of the newest rows, so an unscoped lookup only found
+            # these while the database happened to be nearly empty.
+            params={"accountId": SEEDED_ACCOUNT_ID, "dateFrom": "2026-01-01", "dateTo": "2026-02-28"},
         )
     ).json()
     imported = [t for t in transactions if t["statement_id"] == statement["id"]]
@@ -181,7 +189,11 @@ async def test_upload_statement_applies_matching_categorization_rule(client):
 
     transactions = (
         await client.get(
-            "/budget/transactions", params={"accountId": SEEDED_ACCOUNT_ID}
+            "/budget/transactions",
+            # Scoped to the window the fixture CSVs use. `GET /budget/transactions`
+            # returns one page of the newest rows, so an unscoped lookup only found
+            # these while the database happened to be nearly empty.
+            params={"accountId": SEEDED_ACCOUNT_ID, "dateFrom": "2026-01-01", "dateTo": "2026-02-28"},
         )
     ).json()
     imported = [t for t in transactions if t["statement_id"] == statement["id"]]
@@ -219,7 +231,11 @@ async def test_upload_statement_prefers_payee_history_over_rule(client):
 
     transactions = (
         await client.get(
-            "/budget/transactions", params={"accountId": SEEDED_ACCOUNT_ID}
+            "/budget/transactions",
+            # Scoped to the window the fixture CSVs use. `GET /budget/transactions`
+            # returns one page of the newest rows, so an unscoped lookup only found
+            # these while the database happened to be nearly empty.
+            params={"accountId": SEEDED_ACCOUNT_ID, "dateFrom": "2026-01-01", "dateTo": "2026-02-28"},
         )
     ).json()
     imported = [t for t in transactions if t["statement_id"] == statement["id"]]
@@ -246,7 +262,11 @@ async def test_upload_statement_without_match_leaves_transaction_uncategorized(c
 
     transactions = (
         await client.get(
-            "/budget/transactions", params={"accountId": SEEDED_ACCOUNT_ID}
+            "/budget/transactions",
+            # Scoped to the window the fixture CSVs use. `GET /budget/transactions`
+            # returns one page of the newest rows, so an unscoped lookup only found
+            # these while the database happened to be nearly empty.
+            params={"accountId": SEEDED_ACCOUNT_ID, "dateFrom": "2026-01-01", "dateTo": "2026-02-28"},
         )
     ).json()
     imported = [t for t in transactions if t["statement_id"] == statement["id"]]

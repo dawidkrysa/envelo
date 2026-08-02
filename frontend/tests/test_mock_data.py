@@ -1,21 +1,9 @@
 from mock_data import (
     envelope_by_id,
     envelope_state,
-    format_money,
-    format_short,
 )
 
-
-def test_format_money_groups_thousands_eu_style():
-    assert format_money(1234.56) == "1.234,56 €"
-
-
-def test_format_money_negative_uses_minus_sign():
-    assert format_money(-86.42) == "−86,42 €"
-
-
-def test_format_short_groups_thousands_without_decimals():
-    assert format_short(1234) == "1.234"
+# Money formatting moved to `currency.py` - see tests/test_currency.py.
 
 
 def test_envelope_states_cover_all_three_design_states():

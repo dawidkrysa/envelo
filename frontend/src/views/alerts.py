@@ -46,4 +46,4 @@ async def build_alerts_view(page: ft.Page) -> ft.View:
         ),
     ]
 
-    return app_shell(page, "/alerts", "alerts", body)
+    return await app_shell(page, "/alerts", "alerts", body)

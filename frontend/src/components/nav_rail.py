@@ -258,7 +258,7 @@ def build_nav(
                 content=ft.Row(
                     [
                         ft.Container(
-                            content=ft.Text("MK", style=text_style(11.5, 500, p.link)),
+                            content=ft.Text("DK", style=text_style(11.5, 500, p.link)),
                             width=28,
                             height=28,
                             bgcolor=p.ok_fill,
@@ -267,7 +267,7 @@ def build_nav(
                         ),
                         ft.Column(
                             [
-                                ft.Text("Maartje Kuipers", style=text_style(12.5, 500, p.ink)),
+                                ft.Text("Dawid Krysa", style=text_style(12.5, 500, p.ink)),
                                 ft.Text("Settings", style=text_style(11, 400, p.ink3)),
                             ],
                             spacing=1,

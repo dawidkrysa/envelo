@@ -8,7 +8,7 @@ from app import schemas
 from app.core.logging import setup_logging
 from app.db import repositories as repo
 from app.db.session import engine, get_db
-from fastapi import APIRouter, Depends, FastAPI, Form, status
+from fastapi import APIRouter, Depends, FastAPI, Form, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 setup_logging()
@@ -306,6 +306,17 @@ async def get_envelope_allocations_v1(
     return await repo.get_envelope_allocations(db, envelopeId)
 
 
+# Total unassigned money across all accounts ("Ready to Assign")
+@envelope_allocations_router.get(
+    "/to-assign",
+    summary="Get total unassigned money across all accounts",
+    status_code=status.HTTP_200_OK,
+    response_model=schemas.ToAssignRead,
+)
+async def get_to_assign_v1(db: AsyncSession = Depends(get_db)):
+    return schemas.ToAssignRead(to_assign=await repo.get_to_assign(db))
+
+
 # Update
 @envelope_allocations_router.put(
     "/{envelopeAllocationId}",
@@ -479,18 +490,56 @@ async def create_transaction_v1(
     response_model=list[schemas.TransactionRead],
 )
 async def get_transactions_v1(
+    response: Response,
     accountId: uuid.UUID | None = None,
     envelopeId: uuid.UUID | None = None,
     categoryGroupId: uuid.UUID | None = None,
     dateFrom: date | None = None,
     dateTo: date | None = None,
+    q: str | None = None,
     skip: int = 0,
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
 ):
-    return await repo.get_transactions(
-        db, accountId, envelopeId, categoryGroupId, dateFrom, dateTo, skip, limit
+    """One page of matching transactions, newest first.
+
+    `q` is a free-text search over payee name, description and amount. It belongs
+    here rather than in the client because the client only ever holds one page:
+    searching there answered "which of these 50 rows match", not "which of my
+    transactions match".
+
+    The full match count travels in `X-Total-Count` rather than wrapping the body
+    in `{items, total}`: a header leaves `response_model` - and therefore every
+    existing caller - untouched, while giving a paginating client the one thing
+    a bare list cannot tell it, namely how much it is not showing.
+    """
+    response.headers["X-Total-Count"] = str(
+        await repo.count_transactions(
+            db, accountId, envelopeId, categoryGroupId, dateFrom, dateTo, q
+        )
     )
+    return await repo.get_transactions(
+        db, accountId, envelopeId, categoryGroupId, dateFrom, dateTo, q, skip, limit
+    )
+
+
+# Read - aggregate.
+#
+# Declared before the "/{transactionId}" routes below: FastAPI matches in
+# declaration order, so a dynamic segment declared first would swallow
+# "spent-by-envelope" and fail trying to parse it as a UUID.
+@transactions_router.get(
+    "/spent-by-envelope",
+    summary="Money out per envelope over a period",
+    status_code=status.HTTP_200_OK,
+    response_model=list[schemas.EnvelopeSpentRead],
+)
+async def get_spent_by_envelope_v1(
+    dateFrom: date | None = None,
+    dateTo: date | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    return await repo.get_spent_by_envelope(db, dateFrom, dateTo)
 
 
 # Update

@@ -6,7 +6,8 @@ import flet as ft
 from components.button import link_button, primary_button
 from components.card import flat_card
 from components.page_header import page_header
-from mock_data import ACCOUNTS_LIST, format_money
+from currency import format_money
+from mock_data import ACCOUNTS_LIST
 from theme import palette, text_style
 from views.common import app_shell
 from views.dialogs import new_account_dialog
@@ -70,4 +71,4 @@ async def build_accounts_view(page: ft.Page) -> ft.View:
         ft.ResponsiveRow(cards, spacing=14, run_spacing=14),
     ]
 
-    return app_shell(page, "/accounts", "accounts", body)
+    return await app_shell(page, "/accounts", "accounts", body)

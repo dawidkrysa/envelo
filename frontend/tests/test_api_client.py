@@ -8,6 +8,8 @@ _ACCOUNTS = [{"id": "acc-1", "name": "ING Checking"}]
 _PAYEES = [{"id": "pay-1", "name": "Albert Heijn"}]
 _ENVELOPES = [{"id": "env-1", "name": "Groceries"}]
 _TRANSACTIONS = [{"id": "tx-1", "amount": "-12.50"}]
+_CATEGORY_GROUPS = [{"id": "cg-1", "name": "Everyday"}]
+_ALLOCATIONS = [{"id": "alloc-1", "envelope_id": "env-1", "month": "2026-07-01", "assigned_amount": "100.00"}]
 
 
 class _FakeResponse:
@@ -46,6 +48,13 @@ class _FakeAsyncClient:
         return _FakeResponse(self._status_code, self._json_data)
 
     async def post(self, path, json=None):
+        self.last_path = path
+        self.last_json = json
+        if self._raises is not None:
+            raise self._raises
+        return _FakeResponse(self._status_code, self._json_data)
+
+    async def put(self, path, json=None):
         self.last_path = path
         self.last_json = json
         if self._raises is not None:
@@ -228,3 +237,89 @@ async def test_create_transaction_posts_the_given_payload(monkeypatch):
     await api_client.create_transaction(_NEW_TRANSACTION_PAYLOAD)
     assert fake_client.last_path == "/budget/transactions"
     assert fake_client.last_json == _NEW_TRANSACTION_PAYLOAD
+
+
+async def test_get_category_groups_returns_parsed_list(monkeypatch):
+    monkeypatch.setattr(
+        api_client.httpx,
+        "AsyncClient",
+        lambda **kwargs: _FakeAsyncClient(status_code=200, json_data=_CATEGORY_GROUPS),
+    )
+    assert await api_client.get_category_groups() == _CATEGORY_GROUPS
+
+
+async def test_get_category_groups_returns_empty_list_on_server_error(monkeypatch):
+    monkeypatch.setattr(
+        api_client.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(status_code=500)
+    )
+    assert await api_client.get_category_groups() == []
+
+
+async def test_get_envelope_allocations_returns_parsed_list(monkeypatch):
+    monkeypatch.setattr(
+        api_client.httpx,
+        "AsyncClient",
+        lambda **kwargs: _FakeAsyncClient(status_code=200, json_data=_ALLOCATIONS),
+    )
+    assert await api_client.get_envelope_allocations() == _ALLOCATIONS
+
+
+async def test_get_envelope_allocations_returns_empty_list_when_none_exist(monkeypatch):
+    """The repository raises 404 when no allocation exists yet (e.g. this
+    envelope has never been assigned money) - treated as an empty result,
+    same as any other non-2xx response caught via raise_for_status()."""
+    monkeypatch.setattr(
+        api_client.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(status_code=404)
+    )
+    assert await api_client.get_envelope_allocations(envelope_id="env-1") == []
+
+
+async def test_create_envelope_allocation_returns_parsed_object_on_success(monkeypatch):
+    monkeypatch.setattr(
+        api_client.httpx,
+        "AsyncClient",
+        lambda **kwargs: _FakeAsyncClient(status_code=201, json_data=_ALLOCATIONS[0]),
+    )
+    payload = {"envelope_id": "env-1", "month": "2026-07-01", "assigned_amount": "100.00"}
+    assert await api_client.create_envelope_allocation(payload) == _ALLOCATIONS[0]
+
+
+async def test_create_envelope_allocation_returns_none_on_conflict(monkeypatch):
+    monkeypatch.setattr(
+        api_client.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(status_code=409)
+    )
+    payload = {"envelope_id": "env-1", "month": "2026-07-01", "assigned_amount": "100.00"}
+    assert await api_client.create_envelope_allocation(payload) is None
+
+
+async def test_update_envelope_allocation_sends_put_with_payload(monkeypatch):
+    fake_client = _FakeAsyncClient(status_code=200, json_data=_ALLOCATIONS[0])
+    monkeypatch.setattr(api_client.httpx, "AsyncClient", lambda **kwargs: fake_client)
+    result = await api_client.update_envelope_allocation("alloc-1", {"assigned_amount": "120.00"})
+    assert result == _ALLOCATIONS[0]
+    assert fake_client.last_path == "/budget/envelope-allocations/alloc-1"
+    assert fake_client.last_json == {"assigned_amount": "120.00"}
+
+
+async def test_update_envelope_allocation_returns_none_on_server_error(monkeypatch):
+    monkeypatch.setattr(
+        api_client.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(status_code=500)
+    )
+    result = await api_client.update_envelope_allocation("alloc-1", {"assigned_amount": "120.00"})
+    assert result is None
+
+
+async def test_get_to_assign_returns_parsed_value(monkeypatch):
+    monkeypatch.setattr(
+        api_client.httpx,
+        "AsyncClient",
+        lambda **kwargs: _FakeAsyncClient(status_code=200, json_data={"to_assign": "137.40"}),
+    )
+    assert await api_client.get_to_assign() == 137.4
+
+
+async def test_get_to_assign_returns_zero_on_server_error(monkeypatch):
+    monkeypatch.setattr(
+        api_client.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(status_code=500)
+    )
+    assert await api_client.get_to_assign() == 0
