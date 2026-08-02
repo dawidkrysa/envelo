@@ -7,8 +7,9 @@ from theme import Palette, text_style
 
 
 def eyebrow(p: Palette, *segments: str) -> ft.Control:
-    """Uppercase 11px meta line above the title, e.g. "July 2026 · 9 days left".
-    Multiple segments render with a 1px vertical divider between them."""
+    """Uppercase 11px meta line above the title, e.g. "August 2026 · 29 days
+    left" (`dates.month_label()` / `dates.days_left_label()`). Multiple segments
+    render with a 1px vertical divider between them."""
     parts: list[ft.Control] = []
     for i, seg in enumerate(segments):
         if i > 0:

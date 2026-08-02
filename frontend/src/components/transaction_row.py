@@ -6,7 +6,8 @@ from collections.abc import Callable
 import flet as ft
 
 from components.badge import source_badge
-from mock_data import Transaction, date_short, format_money
+from currency import format_money
+from mock_data import Transaction, date_short
 from theme import Palette, text_style
 
 

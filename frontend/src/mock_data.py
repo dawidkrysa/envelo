@@ -10,23 +10,11 @@ row/card/flow-bar component renders.
 
 from dataclasses import dataclass
 
+from currency import format_amount_bare, format_money
+from dates import days_left_label
 from theme import Palette
 
-MONTH = "July 2026"
-DAYS_LEFT = 9
 POOL = 137.4  # "left to assign" starting pool
-
-
-def format_money(n: float) -> str:
-    """`1.234,56 €` - the design's default EUR (eu) formatting."""
-    sign = "−" if n < 0 else ""
-    body = f"{abs(n):,.2f}".replace(",", "§").replace(".", ",").replace("§", ".")
-    return f"{sign}{body} €"
-
-
-def format_short(n: float) -> str:
-    """`1.234` - whole euros with thousands separator, used in bar-chart labels."""
-    return f"{round(n):,}".replace(",", ".")
 
 
 @dataclass(frozen=True)
@@ -48,23 +36,35 @@ class EnvelopeGroup:
 
 
 GROUPS: list[EnvelopeGroup] = [
-    EnvelopeGroup("living", "Living costs", [
-        Envelope("rent", "Rent", 1150, 1150, 1150),
-        Envelope("groceries", "Groceries", 520, 442.15, 520),
-        Envelope("utilities", "Utilities", 145, 98.4, 150),
-        Envelope("transport", "Transport", 90, 61.2, 90),
-    ]),
-    EnvelopeGroup("quality", "Quality of life", [
-        Envelope("eatingout", "Eating out", 180, 171.6, 180),
-        Envelope("subs", "Subscriptions", 46, 46, 46),
-        Envelope("hobbies", "Hobbies", 120, 64, 120),
-        Envelope("gifts", "Gifts", 60, 82.5, 60),
-    ]),
-    EnvelopeGroup("future", "Future", [
-        Envelope("savings", "Savings", 400, 0, 600),
-        Envelope("holiday", "Holiday fund", 150, 0, 1800),
-        Envelope("emergency", "Emergency buffer", 200, 0, 3000),
-    ]),
+    EnvelopeGroup(
+        "living",
+        "Living costs",
+        [
+            Envelope("rent", "Rent", 1150, 1150, 1150),
+            Envelope("groceries", "Groceries", 520, 442.15, 520),
+            Envelope("utilities", "Utilities", 145, 98.4, 150),
+            Envelope("transport", "Transport", 90, 61.2, 90),
+        ],
+    ),
+    EnvelopeGroup(
+        "quality",
+        "Quality of life",
+        [
+            Envelope("eatingout", "Eating out", 180, 171.6, 180),
+            Envelope("subs", "Subscriptions", 46, 46, 46),
+            Envelope("hobbies", "Hobbies", 120, 64, 120),
+            Envelope("gifts", "Gifts", 60, 82.5, 60),
+        ],
+    ),
+    EnvelopeGroup(
+        "future",
+        "Future",
+        [
+            Envelope("savings", "Savings", 400, 0, 600),
+            Envelope("holiday", "Holiday fund", 150, 0, 1800),
+            Envelope("emergency", "Emergency buffer", 200, 0, 3000),
+        ],
+    ),
 ]
 
 # Bar color per group in the nav's "category groups" list and forecast chart.
@@ -159,6 +159,7 @@ class EnvelopeView:
     spent_label: str
     pct_str: str
     target_note: str
+    target_str: str
     bar_color: str
     left_ink: str
     state_ink: str
@@ -178,8 +179,10 @@ def envelope_view(p: Palette, e: Envelope) -> EnvelopeView:
 
     color = {"over": p.over, "warn": p.warn}.get(state, p.ok)
     labels = {
-        "ok": "Nothing spent yet" if e.spent == 0 else ("Fully spent as planned" if e.spent == e.assigned else "On track"),
-        "warn": f"{DAYS_LEFT} days left",
+        "ok": "Nothing spent yet"
+        if e.spent == 0
+        else ("Fully spent as planned" if e.spent == e.assigned else "On track"),
+        "warn": days_left_label(),
         "over": f"{format_money(e.spent - e.assigned)} over",
     }
     pill_fill, pill_ink, pill_label = {
@@ -205,7 +208,8 @@ def envelope_view(p: Palette, e: Envelope) -> EnvelopeView:
         left_of_label=f"left of {format_money(e.assigned)}",
         spent_label=f"{format_money(e.spent)} spent",
         pct_str=f"{pct}%",
-        target_note=f"target {format_short(e.target)} €" if e.target else "no target",
+        target_note=f"target {format_money(e.target, decimals=0)}" if e.target else "no target",
+        target_str=format_amount_bare(e.target) if e.target else "",
         bar_color=color,
         left_ink=p.over_ink if state == "over" else (p.ink2 if left == 0 else p.ink),
         state_ink=p.over_ink if state == "over" else (p.warn_ink if state == "warn" else p.ink3),
@@ -225,11 +229,35 @@ def attention_envelopes() -> list[Envelope]:
 # --- Statements / rules / payees / accounts / settings mock rows -----------
 
 STATEMENTS = [
-    {"filename": "ING_checking_2026-07.csv", "format": "CSV", "account": "ING Checking", "date": "24 July 2026", "count": 18},
-    {"filename": "revolut_2026-07.ofx", "format": "OFX", "account": "Revolut Card", "date": "22 July 2026", "count": 31},
-    {"filename": "ING_checking_2026-06.csv", "format": "CSV", "account": "ING Checking", "date": "2 July 2026", "count": 46},
+    {
+        "filename": "ING_checking_2026-07.csv",
+        "format": "CSV",
+        "account": "ING Checking",
+        "date": "24 July 2026",
+        "count": 18,
+    },
+    {
+        "filename": "revolut_2026-07.ofx",
+        "format": "OFX",
+        "account": "Revolut Card",
+        "date": "22 July 2026",
+        "count": 31,
+    },
+    {
+        "filename": "ING_checking_2026-06.csv",
+        "format": "CSV",
+        "account": "ING Checking",
+        "date": "2 July 2026",
+        "count": 46,
+    },
     {"filename": "ing_savings_q2.940", "format": "MT940", "account": "ING Savings", "date": "1 July 2026", "count": 7},
-    {"filename": "revolut_2026-06.ofx", "format": "OFX", "account": "Revolut Card", "date": "30 June 2026", "count": 28},
+    {
+        "filename": "revolut_2026-06.ofx",
+        "format": "OFX",
+        "account": "Revolut Card",
+        "date": "30 June 2026",
+        "count": 28,
+    },
 ]
 
 RULES = [
@@ -252,10 +280,10 @@ PAYEES = [
 ]
 
 ACCOUNTS_LIST = [
-    {"name": "ING Checking", "type": "Checking", "balance": 2418.62, "meta": "EUR · last import 24 July"},
-    {"name": "ING Savings", "type": "Savings", "balance": 9250.0, "meta": "EUR · last import 1 July"},
-    {"name": "Revolut Card", "type": "Credit card", "balance": -318.44, "meta": "EUR · last import 22 July"},
-    {"name": "Cash", "type": "Cash", "balance": 85.0, "meta": "EUR · updated by hand"},
+    {"name": "ING Checking", "type": "Checking", "balance": 2418.62, "meta": "PLN · last import 24 July"},
+    {"name": "ING Savings", "type": "Savings", "balance": 9250.0, "meta": "PLN · last import 1 July"},
+    {"name": "Revolut Card", "type": "Credit card", "balance": -318.44, "meta": "PLN · last import 22 July"},
+    {"name": "Cash", "type": "Cash", "balance": 85.0, "meta": "PLN · updated by hand"},
 ]
 
 IMPORT_ROWS = [
@@ -264,20 +292,74 @@ IMPORT_ROWS = [
     {"date": "22.07", "payee": "Café de Sluis", "envelope": "Eating out", "amount": -34.5, "state": "warn"},
     {"date": "21.07", "payee": "Spotify AB", "envelope": "Subscriptions", "amount": -11.99, "state": "ok"},
     {"date": "20.07", "payee": "Coolblue", "envelope": "Hobbies", "amount": -64, "state": "warn"},
-    {"date": "19.07", "payee": "SEPA overboeking 8841", "envelope": "Pick an envelope", "amount": -120, "state": "none"},
+    {
+        "date": "19.07",
+        "payee": "SEPA overboeking 8841",
+        "envelope": "Pick an envelope",
+        "amount": -120,
+        "state": "none",
+    },
 ]
 
 ALERT_HISTORY = [
-    {"title": "Gifts went 22,50 € over its plan", "meta": "Yesterday, 17:42 · Gifts · sent by email", "cta": "Open", "over": True},
-    {"title": "Groceries reached 85% with 9 days left", "meta": "Yesterday, 09:15 · Groceries · sent by email", "cta": "Open", "over": False},
-    {"title": "Eating out reached 95% with 11 days left", "meta": "20 July, 20:03 · Eating out · sent by email", "cta": "Open", "over": False},
-    {"title": "Forecast: you are on pace to overspend by 118,20 €", "meta": "18 July, 08:00 · Whole budget", "cta": "Forecast", "over": True},
-    {"title": "Subscriptions reached 100% with 14 days left", "meta": "17 July, 12:31 · Subscriptions", "cta": "Open", "over": False},
-    {"title": "Transport reached 80% with 19 days left", "meta": "12 July, 07:55 · Transport", "cta": "Open", "over": False},
+    {
+        "title": "Gifts went 22,50 zł over its plan",
+        "meta": "Yesterday, 17:42 · Gifts · sent by email",
+        "cta": "Open",
+        "over": True,
+    },
+    {
+        "title": "Groceries reached 85% with 9 days left",
+        "meta": "Yesterday, 09:15 · Groceries · sent by email",
+        "cta": "Open",
+        "over": False,
+    },
+    {
+        "title": "Eating out reached 95% with 11 days left",
+        "meta": "20 July, 20:03 · Eating out · sent by email",
+        "cta": "Open",
+        "over": False,
+    },
+    {
+        "title": "Forecast: you are on pace to overspend by 118,20 zł",
+        "meta": "18 July, 08:00 · Whole budget",
+        "cta": "Forecast",
+        "over": True,
+    },
+    {
+        "title": "Subscriptions reached 100% with 14 days left",
+        "meta": "17 July, 12:31 · Subscriptions",
+        "cta": "Open",
+        "over": False,
+    },
+    {
+        "title": "Transport reached 80% with 19 days left",
+        "meta": "12 July, 07:55 · Transport",
+        "cta": "Open",
+        "over": False,
+    },
 ]
 
 SETUP_STEPS = [
-    {"n": 1, "title": "Add your first account", "body": "Checking, savings, credit card or cash — it just needs a name and a currency.", "cta": "Add account", "done": True},
-    {"n": 2, "title": "Import a bank statement", "body": "CSV, MT940 or OFX. You will see every row before anything is saved.", "cta": "Import", "done": False},
-    {"n": 3, "title": "Give your money jobs", "body": "Create envelopes and assign this month's money to them.", "cta": "Envelopes", "done": False},
+    {
+        "n": 1,
+        "title": "Add your first account",
+        "body": "Checking, savings, credit card or cash — it just needs a name and a currency.",
+        "cta": "Add account",
+        "done": True,
+    },
+    {
+        "n": 2,
+        "title": "Import a bank statement",
+        "body": "CSV, MT940 or OFX. You will see every row before anything is saved.",
+        "cta": "Import",
+        "done": False,
+    },
+    {
+        "n": 3,
+        "title": "Give your money jobs",
+        "body": "Create envelopes and assign this month's money to them.",
+        "cta": "Envelopes",
+        "done": False,
+    },
 ]

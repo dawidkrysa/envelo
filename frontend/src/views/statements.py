@@ -62,4 +62,4 @@ async def build_statements_view(page: ft.Page) -> ft.View:
         bordered_panel(p, rows),
     ]
 
-    return app_shell(page, "/statements", "statements", body)
+    return await app_shell(page, "/statements", "statements", body)

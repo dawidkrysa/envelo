@@ -29,6 +29,8 @@ from components.tabs import segmented_tabs
 from components.toast import toast
 from components.toggle_switch import toggle_switch
 from components.transaction_row import transaction_card, transaction_table_row
+from currency import format_money
+from dates import days_left_label
 from mock_data import GROUPS, TRANSACTIONS, all_envelopes, envelope_name, envelope_view
 from theme import apply_theme, palette, text_style
 
@@ -58,12 +60,11 @@ def main(page: ft.Page) -> None:
                     "Amount to assign",
                     "input",
                     placeholder="0,00",
-                    amount_style=True,
-                    hint="You have 137,40 € left to assign.",
+                    hint=f"You have {format_money(137.4)} left to assign.",
                 ),
             ],
             cta_label="Assign",
-            preview=("Left to assign afterwards", "137,40 €"),
+            preview=("Left to assign afterwards", format_money(137.4)),
             on_close=lambda e: page.pop_dialog(),
             on_confirm=lambda e: page.pop_dialog(),
         )
@@ -148,12 +149,12 @@ def main(page: ft.Page) -> None:
                             stat_block(
                                 p,
                                 "Safe to spend",
-                                "1.842,10 €",
+                                format_money(1842.10),
                                 value_size=40,
                                 value_color=p.ok_ink,
                                 note="Everyday envelopes only.",
                             ),
-                            mini_stat(p, "Assigned", "520,00 €"),
+                            mini_stat(p, "Assigned", format_money(520)),
                             stat_tile(p, "14", "matched a rule", fill=p.ok_fill, border=p.ok_border, ink=p.ok_ink),
                         ],
                         spacing=24,
@@ -168,10 +169,10 @@ def main(page: ft.Page) -> None:
                                 p,
                                 [
                                     AlertItem(
-                                        message="Gifts is 22,50 € over its plan", cta="Cover it", dot_color=p.over
+                                        message=f"Gifts is {format_money(22.5)} over its plan", cta="Cover it", dot_color=p.over
                                     ),
                                     AlertItem(
-                                        message="Groceries is at 85% — 9 days left", cta="Move money", dot_color=p.warn
+                                        message=f"Groceries is at 85% — {days_left_label()}", cta="Move money", dot_color=p.warn
                                     ),
                                 ],
                             ),
@@ -182,7 +183,7 @@ def main(page: ft.Page) -> None:
                                         p,
                                         AlertItem(
                                             message="",
-                                            title="Gifts went 22,50 € over its plan",
+                                            title=f"Gifts went {format_money(22.5)} over its plan",
                                             meta="Yesterday, 17:42 · Gifts",
                                             cta="Open",
                                             dot_color=p.over,

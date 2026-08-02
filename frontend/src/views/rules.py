@@ -67,4 +67,4 @@ async def build_rules_view(page: ft.Page) -> ft.View:
         ft.Column(rows, spacing=9),
     ]
 
-    return app_shell(page, "/rules", "rules", body)
+    return await app_shell(page, "/rules", "rules", body)

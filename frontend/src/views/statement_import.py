@@ -11,7 +11,8 @@ from components.page_header import page_header
 from components.select_field import select_field
 from components.stat_display import stat_tile
 from components.table_header import table_header
-from mock_data import ACCOUNTS, IMPORT_ROWS, format_money
+from currency import format_money
+from mock_data import ACCOUNTS, IMPORT_ROWS
 from theme import palette, text_style
 from views.common import app_shell, page_band
 
@@ -116,4 +117,4 @@ async def build_import_view(page: ft.Page) -> ft.View:
         bordered_panel(p, rows),
     ]
 
-    return app_shell(page, "/import", "import", body)
+    return await app_shell(page, "/import", "import", body)
