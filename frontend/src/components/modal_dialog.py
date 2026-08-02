@@ -18,7 +18,7 @@ import flet as ft
 from components.button import primary_button, secondary_button
 from components.input_field import label_field, text_input
 from components.select_field import select_field
-from theme import RADIUS_BUTTON, RADIUS_CARD_LG, RADIUS_TILE, Palette, text_style
+from theme import CONTROL_HEIGHT, RADIUS_BUTTON, RADIUS_CARD_LG, RADIUS_TILE, Palette, text_style
 
 
 @dataclass(frozen=True)
@@ -29,13 +29,12 @@ class ModalField:
     options: list[tuple[str, str]] = field(default_factory=list)
     placeholder: str = ""
     hint: str = ""
-    amount_style: bool = False
 
 
 def _date_field(p: Palette, f: ModalField, page: ft.Page) -> tuple[ft.Control, ft.Control]:
     """A read-only field that opens a calendar `ft.DatePicker` on click,
     rather than free-typed text - `page` is needed to show the picker dialog."""
-    text_field = text_input(p, value=f.value, placeholder=f.placeholder, height=40, expand=True, read_only=True)
+    text_field = text_input(p, value=f.value, placeholder=f.placeholder, expand=True, read_only=True)
 
     picker = ft.DatePicker(value=date_.fromisoformat(f.value) if f.value else None)
 
@@ -48,8 +47,8 @@ def _date_field(p: Palette, f: ModalField, page: ft.Page) -> tuple[ft.Control, f
 
     icon = ft.Container(
         content=ft.Icon(ft.Icons.CALENDAR_MONTH_OUTLINED, size=18, color=p.ink2),
-        width=40,
-        height=40,
+        width=CONTROL_HEIGHT,
+        height=CONTROL_HEIGHT,
         border=ft.Border.all(1, p.line),
         border_radius=RADIUS_BUTTON,
         alignment=ft.Alignment.CENTER,
@@ -60,8 +59,12 @@ def _date_field(p: Palette, f: ModalField, page: ft.Page) -> tuple[ft.Control, f
 
 
 def _field_control(p: Palette, f: ModalField, page: ft.Page | None = None) -> tuple[ft.Control, ft.Control]:
+    # No explicit heights here: every field kind inherits `theme.CONTROL_HEIGHT`,
+    # so a dialog mixing selects and inputs (Add envelope, Add transaction) keeps
+    # one field size. Pinning them to 40 used to leave the selects visibly taller,
+    # since Material will not draw a dropdown below 48 whatever it is told.
     if f.kind == "select":
-        control: ft.Control = select_field(p, f.options, value=f.value, height=40, expand=True)
+        control: ft.Control = select_field(p, f.options, value=f.value, expand=True)
         value_control = control
     elif f.kind == "date":
         control, value_control = _date_field(p, f, page)
@@ -70,9 +73,8 @@ def _field_control(p: Palette, f: ModalField, page: ft.Page | None = None) -> tu
             p,
             value=f.value,
             placeholder=f.placeholder,
-            height=44 if f.amount_style else 40,
-            size=19 if f.amount_style else 13.5,
-            weight=600 if f.amount_style else 400,
+            size=13.5,
+            weight=400,
             expand=True,
         )
         value_control = control

@@ -82,6 +82,17 @@ RADIUS_TILE = 8  # nav items, small icon tiles
 RADIUS_BADGE = 6
 RADIUS_PILL = 999
 
+# Shared height for form controls that sit next to each other - selects, text
+# inputs, and any button placed in the same row.
+#
+# Not a free choice: a Material dropdown refuses to render below the 48px
+# minimum interactive size whatever `height` it is given, so a select asking for
+# 40 quietly came out ~48 while the input or button beside it got exactly the 40
+# it asked for. Naming that floor once, and using it on both sides, is what keeps
+# a filter/toolbar row on one baseline. Controls that are deliberately compact
+# and never sit beside a select (the ledger's inline amount field) opt out.
+CONTROL_HEIGHT = 48
+
 # Responsive breakpoints (px) matching the design's tablet/desktop nav switch.
 BREAKPOINT_MOBILE = 600
 BREAKPOINT_DESKTOP = 900  # design's "tablet" frame is 900px wide
