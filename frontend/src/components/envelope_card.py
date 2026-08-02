@@ -7,6 +7,7 @@ import flet as ft
 
 from components.badge import state_pill
 from components.button import link_button
+from components.envelope_row import DRAG_GROUP
 from components.progress_bar import progress_bar
 from mock_data import EnvelopeView
 from theme import RADIUS_CARD, Palette, text_style
@@ -19,8 +20,13 @@ def envelope_card(
     on_open: Callable[[ft.ControlEvent], None] | None = None,
     on_assign: Callable[[ft.ControlEvent], None] | None = None,
     on_move: Callable[[ft.ControlEvent], None] | None = None,
-) -> ft.Container:
-    return ft.Container(
+    draggable: bool = False,
+) -> ft.Control:
+    """`draggable` makes the whole card the drag source for moving the envelope
+    to another category group. Safe here, unlike in the ledger row: a card has no
+    text input whose own drag gesture the pan recognizer would fight over, so it
+    does not need a separate handle."""
+    card = ft.Container(
         content=ft.Column(
             [
                 ft.Row(
@@ -66,4 +72,19 @@ def envelope_card(
         border=ft.Border.all(1, ev.card_border),
         border_radius=RADIUS_CARD,
         padding=ft.Padding.only(left=17, right=17, top=17, bottom=15),
+    )
+    if not draggable:
+        return card
+    return ft.Draggable(
+        group=DRAG_GROUP,
+        data=ev.id,
+        content=card,
+        content_feedback=ft.Container(
+            content=ft.Text(ev.name, style=text_style(13, 500, p.ink)),
+            bgcolor=p.sf,
+            border=ft.Border.all(1, p.ok),
+            border_radius=8,
+            padding=ft.Padding.symmetric(horizontal=12, vertical=8),
+            opacity=0.9,
+        ),
     )
