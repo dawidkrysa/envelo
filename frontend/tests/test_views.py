@@ -168,6 +168,16 @@ def stub_forecast_api(monkeypatch):
     monkeypatch.setattr("views.forecast.get_forecast", _empty_forecast)
 
 
+@pytest.fixture(autouse=True)
+def stub_first_run_api(monkeypatch):
+    """Same no-network contract as `stub_transactions_api` above, for
+    `/first-run`. Its three reads are its own: the screen has no nav rail, so it
+    does not go through `views.common.fetch_budget_snapshot()`."""
+    monkeypatch.setattr("views.first_run.get_accounts", _empty_list)
+    monkeypatch.setattr("views.first_run.get_statements", _empty_list)
+    monkeypatch.setattr("views.first_run.get_envelope_allocations", _empty_list)
+
+
 _DETAIL_ENVELOPE = [{"id": "env-1", "name": "Groceries", "category_group_id": "cg-1", "target_amount": None}]
 
 
@@ -2300,6 +2310,141 @@ async def test_alerts_and_their_nav_rail_share_one_fetch(monkeypatch):
     await VIEW_BUILDERS["/alerts"](stub_page())
 
     assert len(calls) == 1
+
+
+# --- First run: a checklist that reads the budget instead of declaring it ----
+
+
+def _stub_first_run(monkeypatch, *, accounts=(), statements=(), allocations=()):
+    async def _accounts():
+        return list(accounts)
+
+    async def _statements(account_id=None):
+        return list(statements)
+
+    async def _allocations(envelope_id=None):
+        return list(allocations)
+
+    monkeypatch.setattr("views.first_run.get_accounts", _accounts)
+    monkeypatch.setattr("views.first_run.get_statements", _statements)
+    monkeypatch.setattr("views.first_run.get_envelope_allocations", _allocations)
+
+
+_AN_ACCOUNT = [{"id": "acc-1", "name": "ING", "currency": "PLN"}]
+_A_STATEMENT = [{"id": "st-1", "account_id": "acc-1", "filename": "jan.csv", "imported_at": "2026-08-01T10:00:00"}]
+
+
+def _is_primary(page, button: ft.Container) -> bool:
+    from theme import palette
+
+    return button.bgcolor == palette(page).brand
+
+
+async def test_first_run_starts_at_step_one_on_an_empty_budget(monkeypatch):
+    _stub_first_run(monkeypatch)
+
+    view = await VIEW_BUILDERS["/first-run"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "STEP 1 OF 3" in texts  # the eyebrow renders uppercase
+
+
+async def test_first_run_points_at_the_step_you_are_actually_on(monkeypatch):
+    """It said "Step 1 of 3" forever, with step 1 ticked - so the one screen whose
+    entire job is telling you where you are, could not."""
+    _stub_first_run(monkeypatch, accounts=_AN_ACCOUNT)
+
+    view = await VIEW_BUILDERS["/first-run"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "STEP 2 OF 3" in texts
+
+
+async def test_first_run_highlights_the_next_step_not_the_finished_ones(monkeypatch):
+    """The mock gave the primary button to *completed* steps, so the screen
+    shouted loudest about what you had already done."""
+    _stub_first_run(monkeypatch, accounts=_AN_ACCOUNT)
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/first-run"](page)
+
+    assert _is_primary(page, find_button(view, "Import"))
+    assert not _is_primary(page, find_button(view, "Add account"))
+
+
+async def test_assigning_money_this_month_finishes_the_last_step(monkeypatch):
+    _stub_first_run(
+        monkeypatch,
+        accounts=_AN_ACCOUNT,
+        statements=_A_STATEMENT,
+        allocations=[{"id": "a1", "envelope_id": "env-1", "month": _this_month(1), "assigned_amount": "200.00"}],
+    )
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/first-run"](page)
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "ALL SET" in texts
+    # A finished checklist with no way out is a dead end - the mock could never
+    # reach this state, so it never needed one.
+    assert find_button(view, "Open your budget") is not None
+
+
+async def test_an_envelope_with_nothing_in_it_is_not_money_with_a_job(monkeypatch):
+    """A 0,00 allocation row means an envelope was created, not funded."""
+    _stub_first_run(
+        monkeypatch,
+        accounts=_AN_ACCOUNT,
+        statements=_A_STATEMENT,
+        allocations=[{"id": "a1", "envelope_id": "env-1", "month": _this_month(1), "assigned_amount": "0"}],
+    )
+
+    view = await VIEW_BUILDERS["/first-run"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "STEP 3 OF 3" in texts
+
+
+async def test_last_months_assignment_does_not_finish_this_months_step(monkeypatch):
+    """The step asks for *this month's* money to have a job."""
+    _stub_first_run(
+        monkeypatch,
+        accounts=_AN_ACCOUNT,
+        statements=_A_STATEMENT,
+        allocations=[{"id": "a1", "envelope_id": "env-1", "month": _last_month(1), "assigned_amount": "500.00"}],
+    )
+
+    view = await VIEW_BUILDERS["/first-run"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "STEP 3 OF 3" in texts
+
+
+async def test_first_run_says_so_when_the_server_is_unreachable(monkeypatch):
+    """Every step reads as undone when nothing can be fetched, and on this screen
+    that invites setting an already-working budget up a second time."""
+    import httpx
+
+    async def _boom(*args, **kwargs):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr("api_client._client", lambda: SimpleNamespace(get=_boom))
+    # Straight through `api_client`, so the real except/`_note_failure` path runs.
+    monkeypatch.setattr("views.first_run.get_accounts", api_client.get_accounts)
+
+    view = await VIEW_BUILDERS["/first-run"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any("Couldn't reach the server" in t for t in texts)
+
+
+async def test_an_empty_budget_is_not_an_outage(monkeypatch):
+    _stub_first_run(monkeypatch)
+
+    view = await VIEW_BUILDERS["/first-run"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert not any("Couldn't reach the server" in t for t in texts)
 
 
 # --- Transactions: refreshing a filter must not make the table jump ---------

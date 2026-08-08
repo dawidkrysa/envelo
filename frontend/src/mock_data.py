@@ -349,26 +349,3 @@ IMPORT_ROWS = [
     },
 ]
 
-SETUP_STEPS = [
-    {
-        "n": 1,
-        "title": "Add your first account",
-        "body": "Checking, savings, credit card or cash — it just needs a name and a currency.",
-        "cta": "Add account",
-        "done": True,
-    },
-    {
-        "n": 2,
-        "title": "Import a bank statement",
-        "body": "CSV, MT940 or OFX. You will see every row before anything is saved.",
-        "cta": "Import",
-        "done": False,
-    },
-    {
-        "n": 3,
-        "title": "Give your money jobs",
-        "body": "Create envelopes and assign this month's money to them.",
-        "cta": "Envelopes",
-        "done": False,
-    },
-]

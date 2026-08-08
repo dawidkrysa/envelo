@@ -247,6 +247,22 @@ async def create_payee(name: str) -> dict | None:
         return None
 
 
+# GET /budget/statements
+async def get_statements(account_id=None) -> list[dict]:
+    """Imported bank statements, newest first is *not* guaranteed - the server
+    does not sort these, so callers that care must sort on `imported_at`."""
+    params = {}
+    if account_id is not None:
+        params["accountId"] = account_id
+    try:
+        response = await _client().get("/budget/statements", params=params)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError as error:
+        _note_failure("statements", error)
+        return []
+
+
 # GET /budget/category-groups
 async def get_category_groups() -> list[dict]:
     try:
