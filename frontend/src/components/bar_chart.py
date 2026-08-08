@@ -44,7 +44,23 @@ class ForecastGroupBar:
     color: str
 
 
-def forecast_bar_chart(p: Palette, bars: list[ForecastGroupBar], *, chart_height: float = 96) -> ft.Column:
+def forecast_bar_chart(
+    p: Palette,
+    bars: list[ForecastGroupBar],
+    *,
+    chart_height: float = 96,
+    baseline_label: str = "Available",
+    projected_label: str = "Projected",
+) -> ft.Column:
+    """Two bars per group: what the group holds, and what it is projected to
+    spend.
+
+    Both legend labels are parameters because both used to be wrong. "Assigned"
+    named the wrong baseline once envelopes started carrying money over - the
+    grey bar is everything available, this month's assignment included - and
+    "Projected by the 31st" was hardcoded, so every February promised a date that
+    does not exist.
+    """
     columns = []
     for b in bars:
         columns.append(
@@ -70,8 +86,8 @@ def forecast_bar_chart(p: Palette, bars: list[ForecastGroupBar], *, chart_height
         )
     legend = ft.Row(
         [
-            ft.Row([ft.Container(width=9, height=9, bgcolor=p.sf3, border_radius=2), ft.Text("Assigned", style=text_style(11.5, 400, p.ink3))], spacing=6),
-            ft.Row([ft.Container(width=9, height=9, bgcolor=p.ok, border_radius=2), ft.Text("Projected by the 31st", style=text_style(11.5, 400, p.ink3))], spacing=6),
+            ft.Row([ft.Container(width=9, height=9, bgcolor=p.sf3, border_radius=2), ft.Text(baseline_label, style=text_style(11.5, 400, p.ink3))], spacing=6),
+            ft.Row([ft.Container(width=9, height=9, bgcolor=p.ok, border_radius=2), ft.Text(projected_label, style=text_style(11.5, 400, p.ink3))], spacing=6),
         ],
         spacing=16,
     )
