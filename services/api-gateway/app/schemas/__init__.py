@@ -25,6 +25,11 @@ from app.schemas.envelope_allocation import (
     EnvelopeAllocationUpdate,
     ToAssignRead,
 )
+from app.schemas.forecast import (
+    ForecastEnvelopeRead,
+    ForecastGroupRead,
+    ForecastRead,
+)
 from app.schemas.payee import PayeeCreate, PayeeDelete, PayeeRead, PayeeUpdate
 from app.schemas.statement import (
     StatementCreate,
@@ -67,6 +72,9 @@ __all__ = [
     "EnvelopeAllocationDelete",
     "EnvelopeAllocationTransfer",
     "ToAssignRead",
+    "ForecastRead",
+    "ForecastGroupRead",
+    "ForecastEnvelopeRead",
     "StatementRead",
     "StatementCreate",
     "StatementUpdate",

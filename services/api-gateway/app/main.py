@@ -45,6 +45,7 @@ transactions_router = APIRouter(prefix="/budget/transactions", tags=["Transactio
 categorization_rules_router = APIRouter(
     prefix="/budget/categorization-rules", tags=["Categorization Rules"]
 )
+forecast_router = APIRouter(prefix="/budget/forecast", tags=["Forecast"])
 
 
 # ==============================================================================
@@ -405,6 +406,37 @@ async def delete_categorization_rule_v1(
 
 
 # ==============================================================================
+# Forecast
+# ==============================================================================
+
+
+@forecast_router.get(
+    "",
+    summary="Projected month-end spending per envelope and category group",
+    status_code=status.HTTP_200_OK,
+    response_model=schemas.ForecastRead,
+)
+async def get_forecast_v1(
+    month: date | None = None,
+    asOf: date | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Where the month lands if spending carries on as it has.
+
+    A read-only projection over existing data - there is no `forecasts` table and
+    nothing is stored. The estimator behind it is named in `method`, so replacing
+    today's straight-line pacing with a real predictive model is a change of
+    implementation, not of contract: a client renders whatever numbers come back
+    and never derives them itself.
+
+    An empty budget returns zeroed totals and empty lists rather than 404. Unlike
+    the entity lists, "you have no envelopes" is a real answer to "how will this
+    month go", not a missing resource.
+    """
+    return await repo.get_forecast(db, month, asOf)
+
+
+# ==============================================================================
 # Statements
 # ==============================================================================
 
@@ -576,5 +608,6 @@ app.include_router(payees_router)
 app.include_router(category_groups_router)
 app.include_router(envelopes_router)
 app.include_router(envelope_allocations_router)
+app.include_router(forecast_router)
 app.include_router(statements_router)
 app.include_router(transactions_router)
