@@ -1,5 +1,27 @@
+import pytest_asyncio
+
 SEEDED_ACCOUNT_ID = "00000000-0000-0000-0000-000000000101"
-SEEDED_ENVELOPE_ID = "00000000-0000-0000-0000-000000000401"
+SEEDED_CATEGORY_GROUP_ID = "00000000-0000-0000-0000-000000000301"
+
+
+@pytest_asyncio.fixture
+async def envelope_id(client) -> str:
+    """An envelope this test created, not a seeded id written down here.
+
+    These tests used to point at the seeded "Groceries" row. That was only ever
+    safe because the API refused to delete an envelope that had allocations or
+    transactions; deleting one is allowed now, so any row in the shared dev
+    database can legitimately disappear - and when Groceries did, eleven tests
+    that had nothing to do with deleting envelopes started failing on a 409.
+
+    Rolled back with the rest of the test, like everything else the suite writes.
+    """
+    response = await client.post(
+        "/budget/envelopes",
+        json={"category_group_id": SEEDED_CATEGORY_GROUP_ID, "name": "Transactions test envelope"},
+    )
+    assert response.status_code == 201
+    return response.json()["id"]
 
 
 async def test_create_transaction_rejects_zero_amount(client):
@@ -33,7 +55,7 @@ async def test_create_transaction_success(client):
     assert transaction["categorization_source"] is None
 
 
-async def test_update_transaction_sets_manual_categorization(client):
+async def test_update_transaction_sets_manual_categorization(client, envelope_id):
     create_response = await client.post(
         "/budget/transactions",
         json={
@@ -48,11 +70,11 @@ async def test_update_transaction_sets_manual_categorization(client):
 
     update_response = await client.put(
         f"/budget/transactions/{transaction_id}",
-        json={"envelope_id": SEEDED_ENVELOPE_ID},
+        json={"envelope_id": envelope_id},
     )
     assert update_response.status_code == 200
     updated = update_response.json()
-    assert updated["envelope_id"] == SEEDED_ENVELOPE_ID
+    assert updated["envelope_id"] == envelope_id
     assert updated["categorization_source"] == "manual"
 
 
@@ -91,7 +113,7 @@ async def test_get_transactions_filters_by_date_range(client):
     assert out_of_range_id not in returned_ids
 
 
-async def _post_transaction(client, *, amount, transaction_date, envelope_id=SEEDED_ENVELOPE_ID):
+async def _post_transaction(client, *, amount, transaction_date, envelope_id):
     response = await client.post(
         "/budget/transactions",
         json={
@@ -106,31 +128,31 @@ async def _post_transaction(client, *, amount, transaction_date, envelope_id=SEE
     return response.json()
 
 
-async def test_spent_by_envelope_sums_only_money_out(client):
+async def test_spent_by_envelope_sums_only_money_out(client, envelope_id):
     """Income must not net off spending: an envelope that received a refund has
     not "spent less", and letting it cancel out would show room that is not
     there."""
-    await _post_transaction(client, amount="-40.00", transaction_date="2030-03-05")
-    await _post_transaction(client, amount="-60.00", transaction_date="2030-03-06")
-    await _post_transaction(client, amount="500.00", transaction_date="2030-03-07")
+    await _post_transaction(client, envelope_id=envelope_id, amount="-40.00", transaction_date="2030-03-05")
+    await _post_transaction(client, envelope_id=envelope_id, amount="-60.00", transaction_date="2030-03-06")
+    await _post_transaction(client, envelope_id=envelope_id, amount="500.00", transaction_date="2030-03-07")
 
     response = await client.get(
         "/budget/transactions/spent-by-envelope", params={"dateFrom": "2030-03-01", "dateTo": "2030-03-31"}
     )
     assert response.status_code == 200
     rows = {r["envelope_id"]: r["spent"] for r in response.json()}
-    assert rows[SEEDED_ENVELOPE_ID] == "100.00"
+    assert rows[envelope_id] == "100.00"
 
 
-async def test_spent_by_envelope_respects_the_period(client):
-    await _post_transaction(client, amount="-40.00", transaction_date="2030-04-05")
-    await _post_transaction(client, amount="-1000.00", transaction_date="2030-05-05")
+async def test_spent_by_envelope_respects_the_period(client, envelope_id):
+    await _post_transaction(client, envelope_id=envelope_id, amount="-40.00", transaction_date="2030-04-05")
+    await _post_transaction(client, envelope_id=envelope_id, amount="-1000.00", transaction_date="2030-05-05")
 
     response = await client.get(
         "/budget/transactions/spent-by-envelope", params={"dateFrom": "2030-04-01", "dateTo": "2030-04-30"}
     )
     rows = {r["envelope_id"]: r["spent"] for r in response.json()}
-    assert rows[SEEDED_ENVELOPE_ID] == "40.00"
+    assert rows[envelope_id] == "40.00"
 
 
 async def test_spent_by_envelope_returns_an_empty_list_for_a_quiet_period(client):
@@ -145,13 +167,13 @@ async def test_spent_by_envelope_returns_an_empty_list_for_a_quiet_period(client
     assert response.json() == []
 
 
-async def test_spent_by_envelope_is_not_capped_by_the_list_page_size(client):
+async def test_spent_by_envelope_is_not_capped_by_the_list_page_size(client, envelope_id):
     """The whole point of the endpoint. `GET /budget/transactions` returns at
     most `limit` rows, so summing that list client-side silently understated
     every total once a period held more transactions than one page."""
     for day in range(1, 8):
         for _ in range(20):
-            await _post_transaction(client, amount="-1.00", transaction_date=f"2030-06-{day:02d}")
+            await _post_transaction(client, envelope_id=envelope_id, amount="-1.00", transaction_date=f"2030-06-{day:02d}")
 
     listed = await client.get(
         "/budget/transactions", params={"dateFrom": "2030-06-01", "dateTo": "2030-06-30", "limit": 100}
@@ -162,16 +184,16 @@ async def test_spent_by_envelope_is_not_capped_by_the_list_page_size(client):
         "/budget/transactions/spent-by-envelope", params={"dateFrom": "2030-06-01", "dateTo": "2030-06-30"}
     )
     rows = {r["envelope_id"]: r["spent"] for r in response.json()}
-    assert rows[SEEDED_ENVELOPE_ID] == "140.00"
+    assert rows[envelope_id] == "140.00"
 
 
-async def test_transactions_are_listed_newest_first(client):
+async def test_transactions_are_listed_newest_first(client, envelope_id):
     """Without an ORDER BY, which rows a LIMIT returns is whatever the planner
     produced - so "the latest 100" was really "an arbitrary 100", and paging
     through `skip` could repeat or skip rows."""
-    await _post_transaction(client, amount="-10.00", transaction_date="2031-01-10")
-    await _post_transaction(client, amount="-20.00", transaction_date="2031-01-30")
-    await _post_transaction(client, amount="-30.00", transaction_date="2031-01-20")
+    await _post_transaction(client, envelope_id=envelope_id, amount="-10.00", transaction_date="2031-01-10")
+    await _post_transaction(client, envelope_id=envelope_id, amount="-20.00", transaction_date="2031-01-30")
+    await _post_transaction(client, envelope_id=envelope_id, amount="-30.00", transaction_date="2031-01-20")
 
     response = await client.get(
         "/budget/transactions", params={"dateFrom": "2031-01-01", "dateTo": "2031-01-31"}
@@ -181,11 +203,11 @@ async def test_transactions_are_listed_newest_first(client):
     assert dates[0] == "2031-01-30"
 
 
-async def test_transaction_list_reports_the_full_match_count(client):
+async def test_transaction_list_reports_the_full_match_count(client, envelope_id):
     """Without this the screen had no way to tell a full page from the end of the
     data - it showed 100 rows and called that "100 of 100" while 410 matched."""
     for day in range(1, 6):
-        await _post_transaction(client, amount="-1.00", transaction_date=f"2032-02-{day:02d}")
+        await _post_transaction(client, envelope_id=envelope_id, amount="-1.00", transaction_date=f"2032-02-{day:02d}")
 
     response = await client.get(
         "/budget/transactions",
@@ -196,9 +218,9 @@ async def test_transaction_list_reports_the_full_match_count(client):
     assert response.headers["X-Total-Count"] == "5"
 
 
-async def test_transaction_list_pages_without_repeating_or_skipping(client):
+async def test_transaction_list_pages_without_repeating_or_skipping(client, envelope_id):
     for day in range(1, 6):
-        await _post_transaction(client, amount=f"-{day}.00", transaction_date=f"2032-03-{day:02d}")
+        await _post_transaction(client, envelope_id=envelope_id, amount=f"-{day}.00", transaction_date=f"2032-03-{day:02d}")
 
     params = {"dateFrom": "2032-03-01", "dateTo": "2032-03-31", "limit": 2}
     seen = []
@@ -261,11 +283,11 @@ async def test_search_matches_description_case_insensitively(client):
     assert len(response.json()) == 1
 
 
-async def test_search_matches_an_amount_ignoring_its_sign(client):
+async def test_search_matches_an_amount_ignoring_its_sign(client, envelope_id):
     """The table renders "−42,50 zł" and nobody types the minus when looking for
     a payment."""
-    await _post_transaction(client, amount="-42.50", transaction_date="2034-07-01")
-    await _post_transaction(client, amount="-99.00", transaction_date="2034-07-02")
+    await _post_transaction(client, envelope_id=envelope_id, amount="-42.50", transaction_date="2034-07-01")
+    await _post_transaction(client, envelope_id=envelope_id, amount="-99.00", transaction_date="2034-07-02")
 
     response = await client.get(
         "/budget/transactions",
@@ -297,11 +319,11 @@ async def test_search_keeps_transactions_that_have_no_payee(client):
     assert response.json()[0]["payee_id"] is None
 
 
-async def test_search_count_matches_the_search_not_the_whole_period(client):
+async def test_search_count_matches_the_search_not_the_whole_period(client, envelope_id):
     """The count and the page are built from one shared filter helper - a total
     that ignored `q` would make the pager offer pages that do not exist."""
     for day in range(1, 4):
-        await _post_transaction(client, amount="-5.00", transaction_date=f"2034-09-{day:02d}")
+        await _post_transaction(client, envelope_id=envelope_id, amount="-5.00", transaction_date=f"2034-09-{day:02d}")
     await client.post(
         "/budget/transactions",
         json={
