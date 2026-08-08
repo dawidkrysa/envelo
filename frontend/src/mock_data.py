@@ -308,23 +308,6 @@ STATEMENTS = [
     },
 ]
 
-PAYEES = [
-    {"name": "Albert Heijn", "envelope": "Groceries", "count": 46, "total": 1842.55, "last": "23 July 2026"},
-    {"name": "Jumbo", "envelope": "Groceries", "count": 22, "total": 918.4, "last": "19 July 2026"},
-    {"name": "NS Reizigers", "envelope": "Transport", "count": 31, "total": 264.9, "last": "23 July 2026"},
-    {"name": "Café de Sluis", "envelope": "Eating out", "count": 8, "total": 212.5, "last": "22 July 2026"},
-    {"name": "Spotify", "envelope": "Subscriptions", "count": 12, "total": 143.88, "last": "21 July 2026"},
-    {"name": "Coolblue", "envelope": "Hobbies", "count": 5, "total": 428.0, "last": "20 July 2026"},
-    {"name": "Woningcorporatie Ymere", "envelope": "Rent", "count": 12, "total": 13800.0, "last": "11 July 2026"},
-]
-
-ACCOUNTS_LIST = [
-    {"name": "ING Checking", "type": "Checking", "balance": 2418.62, "meta": "PLN · last import 24 July"},
-    {"name": "ING Savings", "type": "Savings", "balance": 9250.0, "meta": "PLN · last import 1 July"},
-    {"name": "Revolut Card", "type": "Credit card", "balance": -318.44, "meta": "PLN · last import 22 July"},
-    {"name": "Cash", "type": "Cash", "balance": 85.0, "meta": "PLN · updated by hand"},
-]
-
 IMPORT_ROWS = [
     {"date": "23.07", "payee": "Albert Heijn 1284", "envelope": "Groceries", "amount": -42.18, "state": "ok"},
     {"date": "23.07", "payee": "NS Reizigers", "envelope": "Transport", "amount": -8.6, "state": "ok"},

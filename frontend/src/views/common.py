@@ -22,6 +22,17 @@ from mock_data import Envelope, envelope_state
 from theme import Palette, content_padding, layout_band, palette
 from utils import range_to_dates, resolve_target, to_envelope
 
+PREFILL_SEARCH_KEY = "prefill_transaction_search"
+"""Session key one screen uses to hand a search term to Transactions - the
+Payees screen's "History" action.
+
+Declared here rather than in either view so neither has to import the other, the
+same role `routing.py`'s tables play for routes. It carries a *search*, not an
+exact filter: `GET /budget/transactions` has no payee parameter, so the term
+lands in the visible search box where it can be seen and edited, instead of
+filtering the list by something invisible.
+"""
+
 
 def page_band(page: ft.Page) -> str:
     return layout_band(getattr(page, "width", None))

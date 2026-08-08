@@ -169,6 +169,21 @@ def stub_forecast_api(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def stub_payees_api(monkeypatch):
+    """Same no-network contract as `stub_transactions_api` above, for `/payees`."""
+    monkeypatch.setattr("views.payees.get_payees", _empty_list)
+    monkeypatch.setattr("views.payees.get_payee_stats", _empty_map)
+    monkeypatch.setattr("views.payees.get_envelopes", _empty_list)
+
+
+@pytest.fixture(autouse=True)
+def stub_accounts_api(monkeypatch):
+    """Same no-network contract as `stub_transactions_api` above, for `/accounts`."""
+    monkeypatch.setattr("views.accounts.get_accounts", _empty_list)
+    monkeypatch.setattr("views.accounts.get_account_balances", _empty_map)
+
+
+@pytest.fixture(autouse=True)
 def stub_rules_api(monkeypatch):
     """Same no-network contract as `stub_transactions_api` above, for `/rules`."""
     monkeypatch.setattr("views.rules.get_categorization_rules", _empty_list)
@@ -2317,6 +2332,469 @@ async def test_alerts_and_their_nav_rail_share_one_fetch(monkeypatch):
     await VIEW_BUILDERS["/alerts"](stub_page())
 
     assert len(calls) == 1
+
+
+# --- Payees: history the database counted, plus Rename and Merge that work ---
+
+
+def _stub_payees(monkeypatch, *, payees, stats=None, envelopes=()):
+    state = {"payees": list(payees), "stats": dict(stats or {})}
+
+    async def _payees():
+        return list(state["payees"])
+
+    async def _stats():
+        return dict(state["stats"])
+
+    async def _envelopes():
+        return list(envelopes)
+
+    monkeypatch.setattr("views.payees.get_payees", _payees)
+    monkeypatch.setattr("views.payees.get_payee_stats", _stats)
+    monkeypatch.setattr("views.payees.get_envelopes", _envelopes)
+    return state
+
+
+_BIEDRONKA = {"id": "p1", "name": "Biedronka"}
+_DUPLICATE = {"id": "p2", "name": "BIEDRONKA 1234"}
+
+
+async def test_payees_show_the_history_the_database_counted(monkeypatch):
+    """Was seven fixed rows with invented counts and totals."""
+    _stub_payees(
+        monkeypatch,
+        payees=[_BIEDRONKA],
+        stats={
+            "p1": {
+                "total": "-1842.55",
+                "transaction_count": 46,
+                "last_transaction_date": "2026-07-23",
+                "top_envelope_id": "env-1",
+            }
+        },
+        envelopes=[{"id": "env-1", "name": "Groceries", "category_group_id": "cg-1", "target_amount": None}],
+    )
+
+    view = await VIEW_BUILDERS["/payees"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "Biedronka" in texts
+    assert any("46 transactions · last on 23 July 2026" in t for t in texts)
+    assert "Groceries" in texts
+
+
+async def test_a_payee_that_pays_you_is_not_shown_as_spending(monkeypatch):
+    """The mock rendered `format_money(-total)`, which turned an employer or a
+    refund into an expense. The total is signed and shown as it is."""
+    from currency import format_money
+
+    _stub_payees(
+        monkeypatch,
+        payees=[{"id": "p9", "name": "Kestrel BV"}],
+        stats={"p9": {"total": "3180.00", "transaction_count": 1, "last_transaction_date": "2026-07-15"}},
+    )
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/payees"](page)
+    from theme import palette
+
+    amount = next(c for c in walk(view) if isinstance(c, ft.Text) and c.value == format_money(3180))
+    assert amount.style.color == palette(page).ok_ink
+
+
+async def test_a_payee_nobody_has_filed_reads_as_uncategorized(monkeypatch):
+    _stub_payees(
+        monkeypatch,
+        payees=[_BIEDRONKA],
+        stats={"p1": {"total": "-10.00", "transaction_count": 1, "top_envelope_id": None}},
+    )
+
+    view = await VIEW_BUILDERS["/payees"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "Uncategorized" in texts
+
+
+async def test_a_payee_with_no_transactions_says_so(monkeypatch):
+    _stub_payees(monkeypatch, payees=[_BIEDRONKA], stats={"p1": {"total": "0", "transaction_count": 0}})
+
+    view = await VIEW_BUILDERS["/payees"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "no transactions yet" in texts
+
+
+async def test_payees_are_listed_busiest_first(monkeypatch):
+    """The ones worth renaming or merging are the ones that keep arriving."""
+    _stub_payees(
+        monkeypatch,
+        payees=[{"id": "p1", "name": "Rzadki"}, {"id": "p2", "name": "Czesty"}],
+        stats={"p1": {"transaction_count": 2, "total": "0"}, "p2": {"transaction_count": 40, "total": "0"}},
+    )
+
+    view = await VIEW_BUILDERS["/payees"](stub_page())
+    names = [c.value for c in walk(view) if isinstance(c, ft.Text) and c.value in {"Rzadki", "Czesty"}]
+
+    assert names == ["Czesty", "Rzadki"]
+
+
+async def test_history_hands_the_payee_to_the_transactions_search(monkeypatch):
+    """It used to navigate to an unfiltered list, which answered nothing."""
+    from views.common import PREFILL_SEARCH_KEY
+
+    _stub_payees(monkeypatch, payees=[_BIEDRONKA], stats={"p1": {"total": "0", "transaction_count": 1}})
+
+    routed: list[str] = []
+    page = stub_page()
+    page.navigate = routed.append
+    view = await VIEW_BUILDERS["/payees"](page)
+
+    find_button(view, "History").on_click(SimpleNamespace(control=None))
+
+    assert page.session.store.get(PREFILL_SEARCH_KEY) == "Biedronka"
+    assert routed == ["/transactions"]
+
+
+async def test_transactions_pick_up_a_handed_over_search_once(monkeypatch):
+    """And widen the range: a payee last seen in May, opened in August, would
+    otherwise land on "This month" and read "No transactions match"."""
+    from views.common import PREFILL_SEARCH_KEY
+
+    calls: list[dict] = []
+
+    async def _page(**kwargs):
+        calls.append(kwargs)
+        return [], 0
+
+    monkeypatch.setattr("views.transactions.get_transactions_page", _page)
+
+    page = stub_page()
+    page.session.store.set(PREFILL_SEARCH_KEY, "Biedronka")
+    view = await VIEW_BUILDERS["/transactions"](page)
+
+    assert calls[0]["search"] == "Biedronka"
+    assert any(isinstance(c, ft.TextField) and c.value == "Biedronka" for c in walk(view))
+    # Consumed, so it does not reappear on every later visit to the screen.
+    assert page.session.store.get(PREFILL_SEARCH_KEY) is None
+
+    calls.clear()
+    await VIEW_BUILDERS["/transactions"](stub_page())
+    assert calls[0]["search"] == ""
+
+
+async def test_renaming_a_payee_saves_and_refreshes(monkeypatch):
+    state = _stub_payees(monkeypatch, payees=[_BIEDRONKA], stats={"p1": {"total": "0", "transaction_count": 1}})
+    updated: list[tuple] = []
+
+    async def _update(payee_id, payload):
+        updated.append((payee_id, payload))
+        state["payees"] = [{"id": payee_id, **payload}]
+        return {"id": payee_id, **payload}
+
+    monkeypatch.setattr("api_client.update_payee", _update)
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/payees"](page)
+    find_button(view, "Rename").on_click(SimpleNamespace(control=None))
+    dialog = page.opened_dialogs[0]
+
+    assert _dialog_field(dialog, "Name").value == "Biedronka"
+    _dialog_field(dialog, "Name").value = "Biedronka Sp. z o.o."
+    await dialog.actions[1].on_click(SimpleNamespace(control=None))
+
+    assert updated == [("p1", {"name": "Biedronka Sp. z o.o."})]
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+    assert "Biedronka Sp. z o.o." in texts
+
+
+async def test_merging_offers_every_payee_except_the_one_being_merged(monkeypatch):
+    """Merging a payee into itself would delete it and repoint its transactions
+    at a row that no longer exists."""
+    _stub_payees(
+        monkeypatch,
+        payees=[_BIEDRONKA, _DUPLICATE],
+        stats={"p1": {"total": "0", "transaction_count": 5}, "p2": {"total": "0", "transaction_count": 1}},
+    )
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/payees"](page)
+    # Busiest first, so the second row's Merge belongs to the duplicate.
+    merge_buttons = [
+        c
+        for c in walk(view)
+        if isinstance(c, ft.Container)
+        and isinstance(c.content, ft.Text)
+        and c.content.value == "Merge"
+    ]
+    merge_buttons[1].on_click(SimpleNamespace(control=None))
+    dialog = page.opened_dialogs[0]
+
+    options = [o.key for o in _dialog_field(dialog, "Merge into").options]
+    assert options == ["p1"]
+
+
+async def test_merging_folds_one_payee_into_another(monkeypatch):
+    state = _stub_payees(
+        monkeypatch,
+        payees=[_BIEDRONKA, _DUPLICATE],
+        stats={"p1": {"total": "0", "transaction_count": 5}, "p2": {"total": "0", "transaction_count": 1}},
+    )
+    merged: list[tuple] = []
+
+    async def _merge(from_id, into_id):
+        merged.append((from_id, into_id))
+        state["payees"] = [_BIEDRONKA]
+        return _BIEDRONKA
+
+    monkeypatch.setattr("api_client.merge_payees", _merge)
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/payees"](page)
+    merge_buttons = [
+        c
+        for c in walk(view)
+        if isinstance(c, ft.Container)
+        and isinstance(c.content, ft.Text)
+        and c.content.value == "Merge"
+    ]
+    merge_buttons[1].on_click(SimpleNamespace(control=None))
+    dialog = page.opened_dialogs[0]
+
+    _dialog_field(dialog, "Merge into").value = "p1"
+    await dialog.actions[1].on_click(SimpleNamespace(control=None))
+
+    assert merged == [("p2", "p1")]
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+    assert "BIEDRONKA 1234" not in texts
+
+
+async def test_payees_empty_state(monkeypatch):
+    _stub_payees(monkeypatch, payees=[])
+
+    view = await VIEW_BUILDERS["/payees"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any(t.startswith("No payees yet.") for t in texts)
+
+
+async def test_payees_say_so_when_the_server_is_unreachable(monkeypatch):
+    import httpx
+
+    async def _boom(*args, **kwargs):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr("api_client._client", lambda: SimpleNamespace(get=_boom))
+    # Straight through `api_client`, so the real except/`_note_failure` path runs.
+    monkeypatch.setattr("views.payees.get_payee_stats", api_client.get_payee_stats)
+
+    view = await VIEW_BUILDERS["/payees"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any("Couldn't reach the server" in t for t in texts)
+
+
+# --- Accounts: balances the database summed, in each account's own currency --
+
+
+def _stub_accounts(monkeypatch, *, accounts, balances=None):
+    state = {"accounts": list(accounts), "balances": dict(balances or {})}
+
+    async def _accounts():
+        return list(state["accounts"])
+
+    async def _balances():
+        return dict(state["balances"])
+
+    monkeypatch.setattr("views.accounts.get_accounts", _accounts)
+    monkeypatch.setattr("views.accounts.get_account_balances", _balances)
+    return state
+
+
+_AN_ING = {"id": "acc-1", "name": "ING Checking", "type": "checking", "currency": "PLN"}
+_A_CARD = {"id": "acc-2", "name": "Revolut", "type": "credit_card", "currency": "PLN"}
+
+
+async def test_accounts_show_the_balance_the_database_summed(monkeypatch):
+    """Was a fixed 2 418,62 zł per account in `mock_data.ACCOUNTS_LIST`."""
+    _stub_accounts(
+        monkeypatch,
+        accounts=[_AN_ING],
+        balances={"acc-1": {"balance": "2418.62", "transaction_count": 142, "last_imported_at": "2026-07-24T09:00:00"}},
+    )
+
+    view = await VIEW_BUILDERS["/accounts"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any("2" in t and "418,62 PLN" in t for t in texts)
+    assert any("142 transactions" in t for t in texts)
+    assert any("last import 24 July" in t for t in texts)
+
+
+async def test_an_account_reports_its_own_currency_not_the_display_one(monkeypatch):
+    """`currency.py` is how *this reader* likes to see money; `accounts.currency`
+    is what the account holds. Formatting a EUR balance as złoty would be a
+    different number, not a different formatting."""
+    set_currency("pln")
+    _stub_accounts(
+        monkeypatch,
+        accounts=[{"id": "acc-9", "name": "Wise", "type": "checking", "currency": "EUR"}],
+        balances={"acc-9": {"balance": "100.00", "transaction_count": 1}},
+    )
+
+    view = await VIEW_BUILDERS["/accounts"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any("100,00 EUR" in t for t in texts)
+    assert not any("zł" in t for t in texts)
+
+
+async def test_a_negative_balance_is_shown_as_owed(monkeypatch):
+    _stub_accounts(
+        monkeypatch,
+        accounts=[_A_CARD],
+        balances={"acc-2": {"balance": "-318.44", "transaction_count": 12}},
+    )
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/accounts"](page)
+    from theme import palette
+
+    # The card's headline amount, not the header eyebrow that also names it.
+    amount = next(
+        c
+        for c in walk(view)
+        if isinstance(c, ft.Text) and "318,44 PLN" in (c.value or "") and c.style.size == 26
+    )
+    assert amount.style.color == palette(page).over_ink
+
+
+async def test_an_account_with_no_history_says_so(monkeypatch):
+    _stub_accounts(
+        monkeypatch,
+        accounts=[_AN_ING],
+        balances={"acc-1": {"balance": "0", "transaction_count": 0, "last_imported_at": None}},
+    )
+
+    view = await VIEW_BUILDERS["/accounts"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any("0 transactions · no imports yet" in t for t in texts)
+
+
+async def test_the_total_is_only_claimed_within_one_currency(monkeypatch):
+    """The mock added four balances and called it a total. Across currencies that
+    is a number that is not money in any of them."""
+    _stub_accounts(
+        monkeypatch,
+        accounts=[_AN_ING, {"id": "acc-9", "name": "Wise", "type": "checking", "currency": "EUR"}],
+        balances={"acc-1": {"balance": "100.00"}, "acc-9": {"balance": "50.00"}},
+    )
+
+    view = await VIEW_BUILDERS["/accounts"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "2 ACCOUNTS IN 2 CURRENCIES" in texts
+    assert not any("150" in t for t in texts)
+
+
+async def test_one_currency_still_gets_a_total(monkeypatch):
+    _stub_accounts(
+        monkeypatch,
+        accounts=[_AN_ING, _A_CARD],
+        balances={"acc-1": {"balance": "100.00"}, "acc-2": {"balance": "-30.00"}},
+    )
+
+    view = await VIEW_BUILDERS["/accounts"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "70,00 PLN ACROSS 2 ACCOUNTS" in texts
+
+
+async def test_adding_an_account_saves_it_and_refreshes(monkeypatch):
+    state = _stub_accounts(monkeypatch, accounts=[])
+    created: list[dict] = []
+
+    async def _create(payload):
+        created.append(payload)
+        state["accounts"] = [{"id": "acc-new", **payload}]
+        return {"id": "acc-new", **payload}
+
+    monkeypatch.setattr("api_client.create_account", _create)
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/accounts"](page)
+    find_button(view, "Add account").on_click(SimpleNamespace(control=None))
+    dialog = page.opened_dialogs[0]
+
+    _dialog_field(dialog, "Name").value = " Cash "
+    _dialog_field(dialog, "Type").value = "cash"
+    _dialog_field(dialog, "Currency").value = "PLN"
+    await dialog.actions[1].on_click(SimpleNamespace(control=None))
+
+    assert created == [{"name": "Cash", "type": "cash", "currency": "PLN"}]
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+    assert "Cash" in texts
+
+
+async def test_the_account_dialog_offers_the_type_the_api_accepts(monkeypatch):
+    """The stub offered "credit", which is not a value of the API's `AccountType`
+    enum - picking it would have been a 422 the moment this was wired up."""
+    from views.dialogs import ACCOUNT_TYPES
+
+    assert dict(ACCOUNT_TYPES)["credit_card"] == "Credit card"
+    assert "credit" not in dict(ACCOUNT_TYPES)
+
+
+async def test_editing_an_account_prefills_it_and_updates(monkeypatch):
+    state = _stub_accounts(monkeypatch, accounts=[_AN_ING], balances={"acc-1": {"balance": "10.00"}})
+    updated: list[tuple] = []
+
+    async def _update(account_id, payload):
+        updated.append((account_id, payload))
+        state["accounts"] = [{"id": account_id, **payload}]
+        return {"id": account_id, **payload}
+
+    monkeypatch.setattr("api_client.update_account", _update)
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/accounts"](page)
+    find_button(view, "Edit").on_click(SimpleNamespace(control=None))
+    dialog = page.opened_dialogs[0]
+
+    assert _dialog_field(dialog, "Name").value == "ING Checking"
+    assert _dialog_field(dialog, "Type").value == "checking"
+
+    _dialog_field(dialog, "Name").value = "ING Główne"
+    await dialog.actions[1].on_click(SimpleNamespace(control=None))
+
+    assert updated == [("acc-1", {"name": "ING Główne", "type": "checking", "currency": "PLN"})]
+
+
+async def test_accounts_empty_state(monkeypatch):
+    _stub_accounts(monkeypatch, accounts=[])
+
+    view = await VIEW_BUILDERS["/accounts"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any(t.startswith("No accounts yet.") for t in texts)
+
+
+async def test_accounts_say_so_when_the_server_is_unreachable(monkeypatch):
+    """An unreachable server renders every account at 0,00, which on this screen
+    reads as "your money is gone" rather than "we could not ask"."""
+    import httpx
+
+    async def _boom(*args, **kwargs):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr("api_client._client", lambda: SimpleNamespace(get=_boom))
+    # Straight through `api_client`, so the real except/`_note_failure` path runs.
+    monkeypatch.setattr("views.accounts.get_account_balances", api_client.get_account_balances)
+
+    view = await VIEW_BUILDERS["/accounts"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any("Couldn't reach the server" in t for t in texts)
 
 
 # --- Rules: a screen that described a feature the backend did not have -------

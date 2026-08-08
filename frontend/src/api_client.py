@@ -104,6 +104,43 @@ async def get_accounts() -> list[dict]:  # GET /budget/accounts
         return []
 
 
+# GET /budget/accounts/balances
+async def get_account_balances() -> dict[str, dict]:
+    """`{account_id: {balance, transaction_count, last_imported_at}}`.
+
+    Keyed by id so a caller can look an account up directly. Summed by the
+    database rather than from a fetched transaction list, which caps at 100 rows
+    and would understate any account with real history.
+    """
+    try:
+        response = await _client().get("/budget/accounts/balances")
+        response.raise_for_status()
+        return {row["account_id"]: row for row in response.json()}
+    except httpx.HTTPError as error:
+        _note_failure("balances", error)
+        return {}
+
+
+# POST /budget/accounts
+async def create_account(payload: dict) -> dict | None:
+    try:
+        response = await _client().post("/budget/accounts", json=payload)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError:
+        return None
+
+
+# PUT /budget/accounts/{accountId}
+async def update_account(account_id: str, payload: dict) -> dict | None:
+    try:
+        response = await _client().put(f"/budget/accounts/{account_id}", json=payload)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError:
+        return None
+
+
 # GET /budget/payees
 async def get_payees() -> list[dict]:
     try:
@@ -231,6 +268,49 @@ async def get_spent_by_envelope(*, date_from=None, date_to=None) -> dict[str, fl
 async def create_transaction(payload: dict) -> dict | None:
     try:
         response = await _client().post("/budget/transactions", json=payload)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError:
+        return None
+
+
+# GET /budget/payees/stats
+async def get_payee_stats() -> dict[str, dict]:
+    """`{payee_id: {total, transaction_count, last_transaction_date, top_envelope_id}}`.
+
+    `total` is signed: a payee that pays you (an employer, a refund) reports a
+    positive. Counted and summed by the database, because a payee with more
+    history than one page of `GET /budget/transactions` would otherwise be
+    reported short.
+    """
+    try:
+        response = await _client().get("/budget/payees/stats")
+        response.raise_for_status()
+        return {row["payee_id"]: row for row in response.json()}
+    except httpx.HTTPError as error:
+        _note_failure("payee history", error)
+        return {}
+
+
+# PUT /budget/payees/{payeeId}
+async def update_payee(payee_id: str, payload: dict) -> dict | None:
+    try:
+        response = await _client().put(f"/budget/payees/{payee_id}", json=payload)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError:
+        return None
+
+
+# POST /budget/payees/merge
+async def merge_payees(from_payee_id: str, into_payee_id: str) -> dict | None:
+    """Folds one payee into another, moving its transactions across. Returns the
+    surviving payee, or `None` on failure."""
+    try:
+        response = await _client().post(
+            "/budget/payees/merge",
+            json={"from_payee_id": from_payee_id, "into_payee_id": into_payee_id},
+        )
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError:

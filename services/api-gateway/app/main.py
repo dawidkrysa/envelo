@@ -79,6 +79,28 @@ async def get_accounts_v1(
     return await repo.get_accounts(db, skip, limit)
 
 
+# Read - aggregate.
+#
+# Declared before the "/{accountId}" routes below, mirroring
+# "/budget/transactions/spent-by-envelope": FastAPI matches in declaration
+# order, and a dynamic segment declared first would swallow "balances" and fail
+# trying to parse it as a UUID.
+@accounts_router.get(
+    "/balances",
+    summary="Balance, transaction count and last import per account",
+    status_code=status.HTTP_200_OK,
+    response_model=list[schemas.AccountBalanceRead],
+)
+async def get_account_balances_v1(db: AsyncSession = Depends(get_db)):
+    """Every account's standing, including accounts nothing has touched yet.
+
+    An empty list when there are no accounts at all - not the 404 the account
+    *list* endpoint raises. "You have no accounts" is a real answer to "how do
+    your accounts stand".
+    """
+    return await repo.get_account_balances(db)
+
+
 # Update
 @accounts_router.put(
     "/{accountId}",
@@ -134,6 +156,39 @@ async def get_payee_v1(
     skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)
 ):
     return await repo.get_payees(db, skip, limit)
+
+
+# Read - aggregate.
+#
+# Declared before the "/{payeeId}" routes below: FastAPI matches in declaration
+# order, so a dynamic segment declared first would swallow "stats".
+@payees_router.get(
+    "/stats",
+    summary="Transaction count, total, last date and usual envelope per payee",
+    status_code=status.HTTP_200_OK,
+    response_model=list[schemas.PayeeStatsRead],
+)
+async def get_payee_stats_v1(db: AsyncSession = Depends(get_db)):
+    """Every payee's history, including payees nothing has been spent on.
+
+    An empty list when there are no payees at all, not the 404 the payee *list*
+    endpoint raises.
+    """
+    return await repo.get_payee_stats(db)
+
+
+# Fold one payee into another, moving its transactions across
+@payees_router.post(
+    "/merge",
+    summary="Merge one payee into another",
+    status_code=status.HTTP_200_OK,
+    response_model=schemas.PayeeRead,
+)
+async def merge_payees_v1(data: schemas.PayeeMerge, db: AsyncSession = Depends(get_db)):
+    """Imports create a payee per spelling, so one shop arrives as several and
+    the history that drives categorization is split between them. Returns the
+    surviving payee."""
+    return await repo.merge_payees(db, data)
 
 
 # Update
