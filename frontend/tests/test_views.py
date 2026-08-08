@@ -169,6 +169,13 @@ def stub_forecast_api(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def stub_rules_api(monkeypatch):
+    """Same no-network contract as `stub_transactions_api` above, for `/rules`."""
+    monkeypatch.setattr("views.rules.get_categorization_rules", _empty_list)
+    monkeypatch.setattr("views.rules.get_envelopes", _empty_list)
+
+
+@pytest.fixture(autouse=True)
 def stub_first_run_api(monkeypatch):
     """Same no-network contract as `stub_transactions_api` above, for
     `/first-run`. Its three reads are its own: the screen has no nav rail, so it
@@ -2310,6 +2317,253 @@ async def test_alerts_and_their_nav_rail_share_one_fetch(monkeypatch):
     await VIEW_BUILDERS["/alerts"](stub_page())
 
     assert len(calls) == 1
+
+
+# --- Rules: a screen that described a feature the backend did not have -------
+
+
+_RULE_ENVELOPES = [
+    {"id": "env-1", "name": "Groceries", "category_group_id": "cg-1", "target_amount": None},
+    {"id": "env-2", "name": "Transport", "category_group_id": "cg-1", "target_amount": None},
+]
+
+
+def _stub_rules(monkeypatch, *, rules, envelopes=_RULE_ENVELOPES):
+    state = {"rules": list(rules)}
+
+    async def _rules():
+        return list(state["rules"])
+
+    async def _envelopes():
+        return list(envelopes)
+
+    monkeypatch.setattr("views.rules.get_categorization_rules", _rules)
+    monkeypatch.setattr("views.rules.get_envelopes", _envelopes)
+    return state
+
+
+async def test_rules_list_the_real_rules_with_their_envelope_names(monkeypatch):
+    """Was six fixed rows naming envelopes that did not exist in the database."""
+    _stub_rules(monkeypatch, rules=[{"id": "r1", "envelope_id": "env-2", "phrase": "Orlen"}])
+
+    view = await VIEW_BUILDERS["/rules"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "Orlen" in texts
+    assert "Transport" in texts
+
+
+async def test_rules_are_shown_in_the_order_that_settles_a_tie(monkeypatch):
+    """The mock numbered rows 1..n beside "applied top to bottom", implying a
+    precedence the server does not have. The longest matching phrase wins, so
+    that is the order shown - and there is no numbering to imply otherwise."""
+    _stub_rules(
+        monkeypatch,
+        rules=[
+            {"id": "r1", "envelope_id": "env-1", "phrase": "Bie"},
+            {"id": "r2", "envelope_id": "env-1", "phrase": "Biedronka Sp"},
+            {"id": "r3", "envelope_id": "env-1", "phrase": "Biedronka"},
+        ],
+    )
+
+    view = await VIEW_BUILDERS["/rules"](stub_page())
+    phrases = [c.value for c in walk(view) if isinstance(c, ft.Text) and c.value in {"Bie", "Biedronka", "Biedronka Sp"}]
+
+    assert phrases == ["Biedronka Sp", "Biedronka", "Bie"]
+
+
+async def test_rules_no_longer_claim_a_match_count(monkeypatch):
+    """Nothing records which rule filed which transaction, so "46 matches" was
+    either invented or a different question wearing the same label."""
+    _stub_rules(monkeypatch, rules=[{"id": "r1", "envelope_id": "env-1", "phrase": "Biedronka"}])
+
+    view = await VIEW_BUILDERS["/rules"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert not any("match" in t.lower() and "wins" not in t.lower() for t in texts)
+
+
+async def test_the_rules_header_no_longer_promises_an_order(monkeypatch):
+    _stub_rules(monkeypatch, rules=[])
+
+    view = await VIEW_BUILDERS["/rules"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert not any("TOP TO BOTTOM" in t for t in texts)
+    assert "LONGEST MATCH WINS" in texts
+
+
+async def test_rules_empty_state_says_what_a_rule_would_do(monkeypatch):
+    _stub_rules(monkeypatch, rules=[])
+
+    view = await VIEW_BUILDERS["/rules"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any(t.startswith("No rules yet.") for t in texts)
+
+
+async def test_a_rule_pointing_at_a_deleted_envelope_still_renders(monkeypatch):
+    """Deleting an envelope drops its rules, but a rule can still outlive its
+    envelope between one screen's fetch and the next - and a KeyError here would
+    take the whole screen down."""
+    _stub_rules(monkeypatch, rules=[{"id": "r1", "envelope_id": "gone", "phrase": "Biedronka"}])
+
+    view = await VIEW_BUILDERS["/rules"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "Deleted envelope" in texts
+
+
+async def test_the_rule_dialog_offers_only_the_condition_the_matcher_supports(monkeypatch):
+    """It used to offer "Payee contains" / "Description contains" / "Amount
+    equals" against a model with one `phrase` column - two could never be saved,
+    and the one that could was matched against the description."""
+    _stub_rules(monkeypatch, rules=[])
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/rules"](page)
+    find_button(view, "Add rule").on_click(SimpleNamespace(control=None))
+    dialog = page.opened_dialogs[0]
+
+    labels = [c.value for c in walk(dialog) if isinstance(c, ft.Text) and (c.value or "").isupper()]
+    assert "PAYEE CONTAINS" in labels
+    assert "PUT IT IN" in labels
+    assert not any("DESCRIPTION" in ln or "AMOUNT" in ln for ln in labels)
+
+
+async def test_adding_a_rule_saves_it_and_refreshes(monkeypatch):
+    state = _stub_rules(monkeypatch, rules=[])
+    created: list[dict] = []
+
+    async def _create(payload):
+        created.append(payload)
+        state["rules"] = [{"id": "r9", **payload}]
+        return {"id": "r9", **payload}
+
+    monkeypatch.setattr("api_client.create_categorization_rule", _create)
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/rules"](page)
+    find_button(view, "Add rule").on_click(SimpleNamespace(control=None))
+    dialog = page.opened_dialogs[0]
+
+    _dialog_field(dialog, "Payee contains").value = "  Biedronka  "
+    _dialog_field(dialog, "Put it in").value = "env-1"
+    await dialog.actions[1].on_click(SimpleNamespace(control=None))
+
+    assert created == [{"envelope_id": "env-1", "phrase": "Biedronka"}]
+    # Refetched, not patched in place: the list has to agree with the server.
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+    assert "Biedronka" in texts
+
+
+async def test_a_rule_needs_both_a_phrase_and_an_envelope(monkeypatch):
+    _stub_rules(monkeypatch, rules=[])
+    calls: list[dict] = []
+
+    async def _create(payload):
+        calls.append(payload)
+        return {"id": "r9", **payload}
+
+    monkeypatch.setattr("api_client.create_categorization_rule", _create)
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/rules"](page)
+    find_button(view, "Add rule").on_click(SimpleNamespace(control=None))
+    dialog = page.opened_dialogs[0]
+
+    _dialog_field(dialog, "Payee contains").value = "   "
+    _dialog_field(dialog, "Put it in").value = "env-1"
+    await dialog.actions[1].on_click(SimpleNamespace(control=None))
+
+    assert calls == []
+    assert page.opened_dialogs  # still open, with an error to read
+
+
+async def test_editing_a_rule_prefills_it_and_updates(monkeypatch):
+    state = _stub_rules(monkeypatch, rules=[{"id": "r1", "envelope_id": "env-1", "phrase": "Biedronka"}])
+    updated: list[tuple] = []
+
+    async def _update(rule_id, payload):
+        updated.append((rule_id, payload))
+        state["rules"] = [{"id": rule_id, **payload}]
+        return {"id": rule_id, **payload}
+
+    monkeypatch.setattr("api_client.update_categorization_rule", _update)
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/rules"](page)
+    find_button(view, "Edit").on_click(SimpleNamespace(control=None))
+    dialog = page.opened_dialogs[0]
+
+    assert _dialog_field(dialog, "Payee contains").value == "Biedronka"
+    assert _dialog_field(dialog, "Put it in").value == "env-1"
+
+    _dialog_field(dialog, "Put it in").value = "env-2"
+    await dialog.actions[1].on_click(SimpleNamespace(control=None))
+
+    assert updated == [("r1", {"envelope_id": "env-2", "phrase": "Biedronka"})]
+
+
+async def test_deleting_a_rule_asks_first_and_says_what_survives(monkeypatch):
+    state = _stub_rules(monkeypatch, rules=[{"id": "r1", "envelope_id": "env-1", "phrase": "Biedronka"}])
+    deleted: list[str] = []
+
+    async def _delete(rule_id):
+        deleted.append(rule_id)
+        state["rules"] = []
+        return {"id": rule_id}
+
+    monkeypatch.setattr("views.rules.delete_categorization_rule", _delete)
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/rules"](page)
+    find_button(view, "Delete").on_click(SimpleNamespace(control=None))
+    dialog = page.opened_dialogs[0]
+
+    messages = [c.value or "" for c in walk(dialog) if isinstance(c, ft.Text)]
+    assert any("keep their envelope" in m for m in messages)
+
+    assert deleted == []  # nothing happens until it is confirmed
+    await dialog.actions[1].on_click(SimpleNamespace(control=None))
+
+    assert deleted == ["r1"]
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+    assert "Biedronka" not in texts
+
+
+async def test_rules_say_so_when_the_server_is_unreachable(monkeypatch):
+    import httpx
+
+    async def _boom(*args, **kwargs):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr("api_client._client", lambda: SimpleNamespace(get=_boom))
+    # Straight through `api_client`, so the real except/`_note_failure` path runs.
+    monkeypatch.setattr("views.rules.get_categorization_rules", api_client.get_categorization_rules)
+
+    view = await VIEW_BUILDERS["/rules"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any("Couldn't reach the server" in t for t in texts)
+
+
+async def test_no_rules_is_not_an_outage(monkeypatch):
+    """The gateway answers "no rules" with 404, which must not raise a banner."""
+    import httpx
+
+    async def _not_found(*args, **kwargs):
+        request = httpx.Request("GET", "http://test/budget/categorization-rules")
+        raise httpx.HTTPStatusError("nope", request=request, response=httpx.Response(404, request=request))
+
+    monkeypatch.setattr("api_client._client", lambda: SimpleNamespace(get=_not_found))
+    monkeypatch.setattr("views.rules.get_categorization_rules", api_client.get_categorization_rules)
+
+    view = await VIEW_BUILDERS["/rules"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert not any("Couldn't reach the server" in t for t in texts)
+    assert any(t.startswith("No rules yet.") for t in texts)
 
 
 # --- First run: a checklist that reads the budget instead of declaring it ----

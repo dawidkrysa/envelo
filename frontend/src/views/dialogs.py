@@ -1,8 +1,8 @@
 """Modal dialogs - Assign money / Move money / Add-or-edit envelope / Add
-transaction read the form back out and call the API on confirm. Add category
-group / Add rule / Add account are still stubs (Confirm just closes) - not
-wired to the backend yet. See `utils.parse_amount`/`utils.parse_date` for the
-shared field-parsing helpers.
+transaction / Add-or-edit rule read the form back out and call the API on
+confirm. Add category group and Add account are still stubs (Confirm just
+closes) - not wired to the backend yet. See `utils.parse_amount`/
+`utils.parse_date` for the shared field-parsing helpers.
 """
 
 from collections.abc import Awaitable, Callable
@@ -14,15 +14,10 @@ import api_client
 from components.button import danger_button
 from components.modal_dialog import ModalField, build_modal
 from currency import format_money
-from mock_data import all_envelopes
 from theme import palette, text_style
 from utils import parse_amount, parse_date, range_to_dates
 
 _TEXT_STYLE = "height:40px;padding:0 12px;background:var(--sf);border:1px solid var(--line);border-radius:9px;font:400 13.5px/1 'IBM Plex Sans',sans-serif"
-
-
-def _envelope_options() -> list[tuple[str, str]]:
-    return [(e.id, f"{e.group_name} · {e.name}") for e in all_envelopes()]
 
 
 def _close(page: ft.Page):
@@ -379,27 +374,79 @@ def confirm_delete_dialog(
     return dialog
 
 
-def new_rule_dialog(page: ft.Page) -> ft.AlertDialog:
+def new_rule_dialog(
+    page: ft.Page,
+    *,
+    envelopes: list[dict] | None = None,
+    rule: dict | None = None,
+    on_saved: Callable[[], Awaitable[None]] | None = None,
+) -> ft.AlertDialog:
+    """Add and Edit share this one dialog, like `new_envelope_dialog` above.
+
+    One condition, not three. The dialog used to offer "Payee contains" /
+    "Description contains" / "Amount equals" against a model that has a single
+    `phrase` column - two of the three could not be saved, and the one that could
+    was matched against the description while the label said payee.
+    """
     p = palette(page)
     close = _close(page)
-    dialog, _ = build_modal(
+    envelope_options = [(e["id"], e["name"]) for e in (envelopes or [])]
+    error_text = ft.Text("", style=text_style(12, 500, p.over_ink))
+
+    async def handle_confirm(e: ft.ControlEvent) -> None:
+        error_text.value = ""
+
+        phrase = controls["Payee contains"].value.strip()
+        if not phrase:
+            error_text.value = "Enter something to match on."
+            page.update()
+            return
+
+        envelope_id = controls["Put it in"].value
+        if not envelope_id:
+            error_text.value = "Pick an envelope."
+            page.update()
+            return
+
+        payload = {"envelope_id": envelope_id, "phrase": phrase}
+        if rule is not None:
+            result = await api_client.update_categorization_rule(rule["id"], payload)
+        else:
+            result = await api_client.create_categorization_rule(payload)
+
+        if result is None:
+            error_text.value = "Couldn't save — try again."
+            page.update()
+            return
+
+        page.pop_dialog()
+        if on_saved is not None:
+            await on_saved()
+
+    dialog, controls = build_modal(
         p,
-        title="Add rule",
-        subtitle="Rules categorize matching transactions the moment you import them.",
+        title="Edit rule" if rule is not None else "Add rule",
+        subtitle="Rules file a transaction the moment you import it, based on who was paid.",
         fields=[
             ModalField(
-                "When",
-                "select",
-                options=[("payee", "Payee contains"), ("desc", "Description contains"), ("amount", "Amount equals")],
+                "Payee contains",
+                "input",
+                placeholder="e.g. Biedronka",
+                hint="Not case-sensitive. When several rules match, the longest phrase wins.",
+                value=rule["phrase"] if rule else "",
             ),
             ModalField(
-                "Pattern", "input", placeholder="e.g. Albert Heijn", hint="Not case-sensitive. Rules run top to bottom."
+                "Put it in",
+                "select",
+                options=envelope_options,
+                value=rule["envelope_id"] if rule else "",
             ),
-            ModalField("Put it in", "select", options=_envelope_options()),
         ],
-        cta_label="Add rule",
+        cta_label="Save changes" if rule is not None else "Add rule",
+        extra=error_text,
+        page=page,
         on_close=close,
-        on_confirm=close,
+        on_confirm=handle_confirm,
     )
     return dialog
 

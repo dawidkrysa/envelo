@@ -308,15 +308,6 @@ STATEMENTS = [
     },
 ]
 
-RULES = [
-    {"pattern": "Albert Heijn", "envelope": "Groceries", "hits": "46 matches"},
-    {"pattern": "Jumbo", "envelope": "Groceries", "hits": "22 matches"},
-    {"pattern": "NS Reizigers", "envelope": "Transport", "hits": "31 matches"},
-    {"pattern": "Shell", "envelope": "Transport", "hits": "9 matches"},
-    {"pattern": "Spotify", "envelope": "Subscriptions", "hits": "12 matches"},
-    {"pattern": "Ymere", "envelope": "Rent", "hits": "12 matches"},
-]
-
 PAYEES = [
     {"name": "Albert Heijn", "envelope": "Groceries", "count": 46, "total": 1842.55, "last": "23 July 2026"},
     {"name": "Jumbo", "envelope": "Groceries", "count": 22, "total": 918.4, "last": "19 July 2026"},

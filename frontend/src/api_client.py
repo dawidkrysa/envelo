@@ -247,6 +247,54 @@ async def create_payee(name: str) -> dict | None:
         return None
 
 
+# GET /budget/categorization-rules
+async def get_categorization_rules() -> list[dict]:
+    """The payee-matching rules applied on import.
+
+    A rule is `{id, envelope_id, phrase}`: the phrase is matched against the
+    payee's name, case-insensitively, longest match winning. There is no
+    ordering to preserve and no "first rule wins" - a list position means
+    nothing to the server.
+    """
+    try:
+        response = await _client().get("/budget/categorization-rules")
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError as error:
+        _note_failure("rules", error)
+        return []
+
+
+# POST /budget/categorization-rules
+async def create_categorization_rule(payload: dict) -> dict | None:
+    try:
+        response = await _client().post("/budget/categorization-rules", json=payload)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError:
+        return None
+
+
+# PUT /budget/categorization-rules/{categorizationRuleId}
+async def update_categorization_rule(rule_id: str, payload: dict) -> dict | None:
+    try:
+        response = await _client().put(f"/budget/categorization-rules/{rule_id}", json=payload)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError:
+        return None
+
+
+# DELETE /budget/categorization-rules/{categorizationRuleId}
+async def delete_categorization_rule(rule_id: str) -> dict | None:
+    try:
+        response = await _client().delete(f"/budget/categorization-rules/{rule_id}")
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError:
+        return None
+
+
 # GET /budget/statements
 async def get_statements(account_id=None) -> list[dict]:
     """Imported bank statements, newest first is *not* guaranteed - the server
