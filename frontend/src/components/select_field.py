@@ -15,10 +15,17 @@ def select_field(
     width: float | None = None,
     expand: bool | int = False,
     on_select=None,
+    disabled: bool = False,
 ) -> ft.Dropdown:
     """`options` is a list of (value, label) pairs, matching the design's
-    `<option value="...">label</option>` rows."""
+    `<option value="...">label</option>` rows.
+
+    `disabled` greys the picker out and drops its handler - for a setting the app
+    can display but cannot yet act on, where leaving it operable would let
+    someone choose an option that does nothing.
+    """
     return ft.Dropdown(
+        disabled=disabled,
         # Falls back to the first option for both an explicit `None` and an
         # empty string - a caller that has "no id yet" (e.g. a dialog opened
         # without a preselected envelope) passes "" here, and that must not

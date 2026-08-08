@@ -3,7 +3,13 @@ from pathlib import Path
 import flet as ft
 
 from currency import CURRENCY_STORAGE_KEY, DEFAULT_CURRENCY, set_currency
-from preferences import ALERT_THRESHOLD_STORAGE_KEY, DEFAULT_ALERT_THRESHOLD, set_alert_threshold
+from preferences import (
+    ALERT_THRESHOLD_STORAGE_KEY,
+    DARK_MODE_STORAGE_KEY,
+    DEFAULT_ALERT_THRESHOLD,
+    set_alert_threshold,
+    set_dark_mode,
+)
 from routing import build_view, stack_for_route
 from theme import apply_theme, layout_band
 
@@ -44,6 +50,8 @@ async def _restore_preferences(page: ft.Page) -> None:
 
     threshold = await _saved(page, ALERT_THRESHOLD_STORAGE_KEY)
     set_alert_threshold(DEFAULT_ALERT_THRESHOLD if threshold is None else threshold)
+
+    set_dark_mode(await _saved(page, DARK_MODE_STORAGE_KEY))
 
 
 async def main(page: ft.Page):

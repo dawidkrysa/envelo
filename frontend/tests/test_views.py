@@ -13,7 +13,7 @@ from flet.messaging.session_store import SessionStore
 
 import api_client
 from currency import DEFAULT_CURRENCY, set_currency
-from preferences import DEFAULT_ALERT_THRESHOLD, set_alert_threshold
+from preferences import DEFAULT_ALERT_THRESHOLD, set_alert_threshold, set_dark_mode
 from routing import VIEW_BUILDERS
 
 DEMO_ROUTES = list(VIEW_BUILDERS)
@@ -107,6 +107,7 @@ def reset_preferences():
     yield
     set_currency(DEFAULT_CURRENCY)
     set_alert_threshold(DEFAULT_ALERT_THRESHOLD)
+    set_dark_mode(False)
 
 
 @pytest.fixture(autouse=True)
@@ -2259,6 +2260,73 @@ async def test_dragging_the_threshold_slider_does_not_commit_every_step():
 
     assert alert_threshold() == DEFAULT_ALERT_THRESHOLD
     assert any(isinstance(c, ft.Text) and c.value == "55%" for c in walk(view))
+
+
+async def test_dark_mode_survives_a_reload(monkeypatch):
+    """It was the one Settings control that looked like it worked and did not:
+    `apply_theme()` set light unconditionally at startup, so choosing dark got
+    you a white screen every time you came back."""
+    from preferences import DARK_MODE_STORAGE_KEY, dark_mode, set_dark_mode
+    from theme import apply_theme
+
+    stored: dict = {}
+    page = stub_page()
+    page.shared_preferences = SimpleNamespace(
+        set=lambda key, value: _async_return(stored.__setitem__(key, value) or True),
+        get=lambda key: _async_return(stored.get(key)),
+    )
+    page.on_route_change = None
+
+    view = await VIEW_BUILDERS["/settings"](page)
+    toggle = next(c for c in walk(view) if isinstance(c, ft.Switch))
+    await toggle.on_change(SimpleNamespace(control=SimpleNamespace(value=True)))
+
+    assert stored == {DARK_MODE_STORAGE_KEY: True}
+
+    # A fresh start reads it back and paints dark before the first route change.
+    set_dark_mode(False)
+    from main import _restore_preferences
+
+    fresh = SimpleNamespace(shared_preferences=SimpleNamespace(get=lambda key: _async_return(stored.get(key))))
+    await _restore_preferences(fresh)
+    assert dark_mode() is True
+
+    painted = stub_page()
+    apply_theme(painted)
+    assert painted.theme_mode == ft.ThemeMode.DARK
+
+
+async def test_the_notification_picker_does_not_offer_a_channel_that_does_not_exist():
+    """Envelo has no mailer, no webhook worker and no queue, so "Email" and
+    "Webhook" both named something that cannot happen - in a control that also
+    persisted nothing."""
+    view = await VIEW_BUILDERS["/settings"](stub_page())
+
+    picker = next(
+        c
+        for c in walk(view)
+        if isinstance(c, ft.Dropdown) and any(o.key in {"none", "email", "webhook"} for o in (c.options or []))
+    )
+    assert picker.disabled is True
+    assert [o.key for o in picker.options] == ["none"]
+
+
+async def test_settings_does_not_greet_a_user_that_does_not_exist():
+    """The eyebrow read "Dawid Krysa · dawid@envelo.local" - a name and an
+    address that exist nowhere. There is no user entity behind the API."""
+    view = await VIEW_BUILDERS["/settings"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert not any("@" in t for t in texts)
+
+
+async def test_sign_out_does_not_promise_a_password_prompt():
+    """There is no auth: the login screen accepts anything and this button only
+    navigates."""
+    view = await VIEW_BUILDERS["/settings"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert not any("password" in t.lower() for t in texts)
 
 
 async def test_saved_threshold_is_restored_before_anything_renders():

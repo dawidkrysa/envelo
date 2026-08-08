@@ -11,6 +11,8 @@ from pathlib import Path
 
 import flet as ft
 
+from preferences import dark_mode
+
 _ASSETS_DIR = Path(__file__).parent / "assets"
 
 # ---------------------------------------------------------------------------
@@ -281,9 +283,17 @@ def content_padding(band: str) -> ft.Padding:
 
 
 def apply_theme(page: ft.Page) -> None:
+    """Fonts, both palettes, and whichever one the reader last chose.
+
+    The mode used to be hardcoded to light here, so the Settings toggle worked
+    until you reloaded and then silently reset - the only preference on that
+    screen that looked like it stuck and did not. `main.py` restores the stored
+    value before calling this.
+    """
     if AVAILABLE_FONTS:
         page.fonts = AVAILABLE_FONTS
     page.theme = LIGHT_THEME
     page.dark_theme = DARK_THEME
-    page.theme_mode = ft.ThemeMode.LIGHT
-    page.bgcolor = LIGHT.canvas
+    dark = dark_mode()
+    page.theme_mode = ft.ThemeMode.DARK if dark else ft.ThemeMode.LIGHT
+    page.bgcolor = (DARK if dark else LIGHT).canvas

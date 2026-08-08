@@ -31,7 +31,15 @@ ALERT_THRESHOLD_STORAGE_KEY = "envelo.alert_threshold"
 """`page.shared_preferences` key the Settings screen writes and `main.py` reads
 back at startup. Named here so the two sides cannot drift apart."""
 
+DARK_MODE_STORAGE_KEY = "envelo.dark_mode"
+"""`page.shared_preferences` key for the appearance toggle. Appearance was the
+one Settings control that looked like it worked and did not survive a reload:
+`theme.apply_theme()` set light unconditionally at startup, so a dark-mode user
+was handed a white screen every time they opened the app."""
+
 _alert_threshold = DEFAULT_ALERT_THRESHOLD
+
+_dark_mode = False
 
 
 def alert_threshold() -> int:
@@ -44,6 +52,21 @@ def alert_fraction() -> float:
     """The same threshold as a `0..1` fraction, for comparing against
     `spent / funded` in `envelope_state()`."""
     return _alert_threshold / 100
+
+
+def dark_mode() -> bool:
+    """Whether the app should paint dark. Read by `theme.apply_theme()` at
+    startup and by the Settings toggle."""
+    return _dark_mode
+
+
+def set_dark_mode(value) -> bool:
+    """Anything unreadable means light, for the same reason as the threshold
+    above: the value comes out of shared preferences and may be missing or
+    stale, and neither is a reason to refuse to start."""
+    global _dark_mode
+    _dark_mode = value is True
+    return _dark_mode
 
 
 def set_alert_threshold(value) -> int:
