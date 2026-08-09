@@ -5,6 +5,15 @@ import flet as ft
 
 from theme import CONTROL_HEIGHT, RADIUS_BUTTON, Palette, text_style
 
+THRESHOLD_FOR_SCROLL = 6
+"""How many options a menu may have before its height is capped.
+
+Below it the menu is left to size itself; above it, it scrolls."""
+
+SCROLLING_MENU_HEIGHT = 300
+"""Cap applied once a menu passes `THRESHOLD_FOR_SCROLL`. Roughly seven rows -
+enough that the list reads as a list, short enough to stay on screen."""
+
 
 def select_field(
     p: Palette,
@@ -68,4 +77,14 @@ def select_field(
         border_radius=RADIUS_BUTTON,
         border_width=1,
         on_select=on_select,
+        # A long list of envelopes or payees opened as one enormous menu running
+        # off the screen, so past a handful of options the height is capped and
+        # the menu scrolls.
+        #
+        # `None` below that, rather than the same cap for everyone: `menu_height`
+        # is a fixed height, not a maximum, so a two-option picker given 300 draws
+        # 300 - two rows and a lot of empty box. Leaving it unset lets the control
+        # size itself to its content, which is exactly right when the content is
+        # small.
+        menu_height=SCROLLING_MENU_HEIGHT if len(options) > THRESHOLD_FOR_SCROLL else None,
     )

@@ -33,6 +33,14 @@ lands in the visible search box where it can be seen and edited, instead of
 filtering the list by something invisible.
 """
 
+CATEGORY_GROUPS_COLLAPSED_KEY = "envelo.category_groups_collapsed"
+"""Session-store key for whether the sidebar's "Category groups" quick-jump list
+is collapsed - session-scoped like `selected_envelope_id`, not a persisted
+preference in `preferences.py`. A budget with a dozen groups pushed the user
+footer (and Settings, below it) off the bottom of the sidebar with no scrollbar
+to hint anything was cut off; collapsing the list is a per-visit fix for that,
+not a choice worth surviving a restart."""
+
 
 def page_band(page: ft.Page) -> str:
     return layout_band(getattr(page, "width", None))
@@ -218,6 +226,13 @@ async def app_shell(
     def navigate(target: str) -> None:
         page.navigate(target)
 
+    def toggle_category_groups(e: ft.ControlEvent) -> None:
+        page.session.store.set(
+            CATEGORY_GROUPS_COLLAPSED_KEY,
+            not page.session.store.get(CATEGORY_GROUPS_COLLAPSED_KEY),
+        )
+        page.run_task(refresh_nav)
+
     async def build_nav_control(data: BudgetSnapshot | None) -> ft.Control:
         category_groups, attention_count = category_group_nav(p, page, data or await fetch_budget_snapshot())
         return build_nav(
@@ -227,6 +242,8 @@ async def app_shell(
             navigate,
             attention_count=attention_count,
             category_groups=category_groups,
+            category_groups_collapsed=bool(page.session.store.get(CATEGORY_GROUPS_COLLAPSED_KEY)),
+            on_toggle_category_groups=toggle_category_groups,
         )
 
     nav_holder = ft.Container(content=await build_nav_control(snapshot))

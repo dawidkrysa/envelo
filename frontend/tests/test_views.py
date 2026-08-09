@@ -1170,6 +1170,34 @@ async def test_currency_selector_switches_and_persists(monkeypatch):
     assert len(rebuilt) == 1
 
 
+def _options(count: int) -> list[tuple[str, str]]:
+    return [(f"o{i}", f"Option {i}") for i in range(count)]
+
+
+async def test_a_short_dropdown_is_left_to_size_itself():
+    """`menu_height` is a fixed height, not a maximum, so giving every picker the
+    same cap draws a two-option menu as 300px of mostly empty box."""
+    from components.select_field import THRESHOLD_FOR_SCROLL, select_field
+    from theme import palette
+
+    p = palette(stub_page())
+
+    assert select_field(p, _options(2)).menu_height is None
+    assert select_field(p, _options(THRESHOLD_FOR_SCROLL)).menu_height is None
+
+
+async def test_a_long_dropdown_scrolls_instead_of_running_off_the_screen():
+    """A budget with thirty envelopes opened one menu the height of the window."""
+    from components.select_field import SCROLLING_MENU_HEIGHT, THRESHOLD_FOR_SCROLL, select_field
+    from theme import palette
+
+    p = palette(stub_page())
+    long_menu = select_field(p, _options(THRESHOLD_FOR_SCROLL + 1))
+
+    assert long_menu.menu_height == SCROLLING_MENU_HEIGHT
+    assert select_field(p, _options(40)).menu_height == SCROLLING_MENU_HEIGHT
+
+
 async def test_currency_options_are_offered_in_the_currency_registry_order():
     view = await VIEW_BUILDERS["/settings"](stub_page())
     from currency import CURRENCIES
@@ -1738,6 +1766,74 @@ async def test_sidebar_attention_badge_counts_real_envelopes(monkeypatch):
 
     assert len(items) == 1
     assert attention == 1  # Groceries is over; Rent is untouched
+
+
+async def test_settings_link_under_the_username_navigates(monkeypatch):
+    """It used to be `on_click=lambda: navigate(...)` - Flet always calls
+    on_click with the event, so a zero-arg lambda raised the moment this was
+    actually clicked rather than navigating anywhere."""
+    from components.nav_rail import build_nav
+    from theme import palette
+
+    routed: list[str] = []
+    nav = build_nav(palette(stub_page()), "desktop", "dashboard", routed.append)
+
+    settings_link = next(
+        c
+        for c in walk(nav)
+        if isinstance(c, ft.Container)
+        and getattr(c, "on_click", None) is not None
+        and isinstance(c.content, ft.Text)
+        and c.content.value == "Settings"
+    )
+    settings_link.on_click(SimpleNamespace(control=settings_link))
+
+    assert routed == ["/settings"]
+
+
+def _category_group_header(nav) -> ft.Container:
+    return next(
+        c
+        for c in walk(nav)
+        if isinstance(c, ft.Container)
+        and getattr(c, "on_click", None) is not None
+        and isinstance(c.content, ft.Row)
+        and any(isinstance(t, ft.Text) and t.value == "CATEGORY GROUPS" for t in c.content.controls)
+    )
+
+
+async def test_category_groups_list_can_be_collapsed_and_expanded(monkeypatch):
+    """A budget with a dozen groups pushed the user footer - and Settings below
+    it - off the bottom of the sidebar, with no scrollbar hinting anything was
+    cut off. Collapsing the list is the fix."""
+    from views.common import CATEGORY_GROUPS_COLLAPSED_KEY
+
+    _stub_envelopes_api(
+        monkeypatch,
+        envelopes=[{"id": "env-1", "name": "Groceries", "category_group_id": "cg-1", "target_amount": None}],
+        category_groups=[{"id": "cg-1", "name": "Everyday"}],
+    )
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/dashboard"](page)
+    nav = view.controls[0].controls[0]  # nav_holder is the Row's first child on desktop
+
+    assert any(isinstance(c, ft.Text) and c.value == "Everyday" for c in walk(nav))
+
+    _category_group_header(nav).on_click(SimpleNamespace(control=None))
+    await page.last_task
+
+    assert page.session.store.get(CATEGORY_GROUPS_COLLAPSED_KEY) is True
+    rebuilt_nav = view.controls[0].controls[0]
+    assert not any(isinstance(c, ft.Text) and c.value == "Everyday" for c in walk(rebuilt_nav))
+    # The header itself survives collapsing - it is what you click to reopen it.
+    assert any(isinstance(c, ft.Text) and c.value == "CATEGORY GROUPS" for c in walk(rebuilt_nav))
+
+    _category_group_header(rebuilt_nav).on_click(SimpleNamespace(control=None))
+    await page.last_task
+
+    assert page.session.store.get(CATEGORY_GROUPS_COLLAPSED_KEY) is False
+    assert any(isinstance(c, ft.Text) and c.value == "Everyday" for c in walk(view.controls[0].controls[0]))
 
 
 # --- Forecast: the projection is the server's, and this screen renders it ----
