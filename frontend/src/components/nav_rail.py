@@ -25,7 +25,6 @@ ICONS: dict[str, str] = {
     "forecast": ft.Icons.SHOW_CHART_ROUNDED,
     "alerts": ft.Icons.ERROR_OUTLINE_ROUNDED,
     "import": ft.Icons.UPLOAD_FILE_OUTLINED,
-    "statements": ft.Icons.DESCRIPTION_OUTLINED,
     "rules": ft.Icons.OUTLINED_FLAG_ROUNDED,
     "accounts": ft.Icons.ACCOUNT_BALANCE_OUTLINED,
     "settings": ft.Icons.SETTINGS_OUTLINED,
@@ -66,8 +65,7 @@ NAV_GROUPS: list[NavGroup] = [
     NavGroup(
         "Import",
         [
-            NavItem("import", "Import statement", "/import"),
-            NavItem("statements", "Statements", "/statements"),
+            NavItem("import", "Import & statements", "/import"),
             NavItem("rules", "Rules", "/rules"),
         ],
     ),

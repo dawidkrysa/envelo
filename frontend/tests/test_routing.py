@@ -21,7 +21,6 @@ def test_all_demo_routes_registered():
         "/envelopes/detail",
         "/transactions",
         "/import",
-        "/statements",
         "/rules",
         "/payees",
         "/accounts",

@@ -96,8 +96,6 @@ GROUPS: list[EnvelopeGroup] = [
 # Bar color per group in the nav's "category groups" list and forecast chart.
 GROUP_BAR_COLOR = {"living": "ok", "quality": "warn", "future": "ok"}
 
-ACCOUNTS: list[str] = ["ING Checking", "ING Savings", "Revolut Card", "Cash"]
-
 
 @dataclass(frozen=True)
 class Transaction:
@@ -272,54 +270,4 @@ def envelope_view(p: Palette, e: Envelope) -> EnvelopeView:
 
 def attention_envelopes() -> list[Envelope]:
     return [e for e in all_envelopes() if envelope_state(e) != "ok"]
-
-
-# --- Statements / rules / payees / accounts / settings mock rows -----------
-
-STATEMENTS = [
-    {
-        "filename": "ING_checking_2026-07.csv",
-        "format": "CSV",
-        "account": "ING Checking",
-        "date": "24 July 2026",
-        "count": 18,
-    },
-    {
-        "filename": "revolut_2026-07.ofx",
-        "format": "OFX",
-        "account": "Revolut Card",
-        "date": "22 July 2026",
-        "count": 31,
-    },
-    {
-        "filename": "ING_checking_2026-06.csv",
-        "format": "CSV",
-        "account": "ING Checking",
-        "date": "2 July 2026",
-        "count": 46,
-    },
-    {"filename": "ing_savings_q2.940", "format": "MT940", "account": "ING Savings", "date": "1 July 2026", "count": 7},
-    {
-        "filename": "revolut_2026-06.ofx",
-        "format": "OFX",
-        "account": "Revolut Card",
-        "date": "30 June 2026",
-        "count": 28,
-    },
-]
-
-IMPORT_ROWS = [
-    {"date": "23.07", "payee": "Albert Heijn 1284", "envelope": "Groceries", "amount": -42.18, "state": "ok"},
-    {"date": "23.07", "payee": "NS Reizigers", "envelope": "Transport", "amount": -8.6, "state": "ok"},
-    {"date": "22.07", "payee": "Café de Sluis", "envelope": "Eating out", "amount": -34.5, "state": "warn"},
-    {"date": "21.07", "payee": "Spotify AB", "envelope": "Subscriptions", "amount": -11.99, "state": "ok"},
-    {"date": "20.07", "payee": "Coolblue", "envelope": "Hobbies", "amount": -64, "state": "warn"},
-    {
-        "date": "19.07",
-        "payee": "SEPA overboeking 8841",
-        "envelope": "Pick an envelope",
-        "amount": -120,
-        "state": "none",
-    },
-]
 

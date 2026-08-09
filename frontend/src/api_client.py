@@ -58,6 +58,7 @@ def _note_failure(endpoint: str, error: Exception) -> None:
     if bucket is not None:
         bucket.append(endpoint)
 
+
 # One client per event loop, reused across calls.
 #
 # Not an optimisation detail: constructing an `httpx.AsyncClient` costs ~150ms
@@ -561,5 +562,29 @@ async def delete_category_group(category_group_id: str) -> dict | None:
         if e.response.status_code == 409:
             return {"error": e.response.json().get("detail", "Couldn't delete — try again.")}
         return None
+    except httpx.HTTPError:
+        return None
+
+
+# POST /budget/statements/upload
+async def create_statement(account_id: str, filename: str, content: bytes) -> dict | None:
+    """Uploads a bank statement. Returns the created `StatementRead` on 201 -
+    including when the server accepted the upload but couldn't parse it
+    (`status == "failed"`, `error_message` set - see
+    app/services/statement_import.py) - `{"error": <detail>}` if the request
+    itself was rejected (bad account, unsupported format, oversized file - the
+    backend's `detail` already says which), or `None` on a genuine network
+    failure, where there is no server response to read a reason from."""
+    try:
+        response = await _client().post(
+            "/budget/statements/upload",
+            data={"account_id": account_id},
+            files={"file": (filename, content, "text/csv")},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPStatusError as e:
+        return {"error": e.response.json().get("detail", "Couldn't upload — try again.")}
     except httpx.HTTPError:
         return None
