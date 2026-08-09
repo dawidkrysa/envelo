@@ -1,8 +1,25 @@
 from app.core.config import get_settings
 
 SEEDED_ACCOUNT_ID = "00000000-0000-0000-0000-000000000101"
-SEEDED_ENVELOPE_GROCERIES_ID = "00000000-0000-0000-0000-000000000401"
-SEEDED_ENVELOPE_SUBSCRIPTIONS_ID = "00000000-0000-0000-0000-000000000403"
+SEEDED_CATEGORY_GROUP_ID = "00000000-0000-0000-0000-000000000301"
+
+
+async def _create_envelope(client, name: str) -> str:
+    """Created here rather than borrowing a seeded envelope id.
+
+    The categorization tests below used to lean on two seeded rows and on the
+    seeded Biedronka -> Groceries transaction history. Envelopes can be deleted
+    now, and deleting one uncategorises its transactions - so both the row and the
+    history it carried could vanish from the shared dev database, which is exactly
+    what happened. Building the situation in the test makes it independent of
+    whatever the database currently holds.
+    """
+    response = await client.post(
+        "/budget/envelopes",
+        json={"category_group_id": SEEDED_CATEGORY_GROUP_ID, "name": name},
+    )
+    assert response.status_code == 201
+    return response.json()["id"]
 
 
 async def test_upload_statement_success(client):
@@ -166,9 +183,12 @@ async def test_upload_statement_partial_bad_file_creates_zero_transactions(clien
 
 
 async def test_upload_statement_applies_matching_categorization_rule(client):
+    """The phrase is matched against the payee's name. The description here
+    deliberately does not contain it, so this can only pass on the payee."""
+    envelope_id = await _create_envelope(client, "Rule-matched envelope")
     rule_response = await client.post(
         "/budget/categorization-rules",
-        json={"envelope_id": SEEDED_ENVELOPE_SUBSCRIPTIONS_ID, "phrase": "UBER EATS"},
+        json={"envelope_id": envelope_id, "phrase": "UBER EATS"},
     )
     assert rule_response.status_code == 201
 
@@ -179,7 +199,7 @@ async def test_upload_statement_applies_matching_categorization_rule(client):
             "file": (
                 "feb.csv",
                 b"date,amount,description,payee\n"
-                b"2026-02-01,35.00,UBER EATS ORDER,Uber Eats\n",
+                b"2026-02-01,35.00,Zamowienie 4471,Uber Eats\n",
                 "text/csv",
             )
         },
@@ -198,22 +218,48 @@ async def test_upload_statement_applies_matching_categorization_rule(client):
     ).json()
     imported = [t for t in transactions if t["statement_id"] == statement["id"]]
     assert len(imported) == 1
-    assert imported[0]["envelope_id"] == SEEDED_ENVELOPE_SUBSCRIPTIONS_ID
+    assert imported[0]["envelope_id"] == envelope_id
     assert imported[0]["categorization_source"] == "rule"
 
 
-async def test_upload_statement_prefers_payee_history_over_rule(client):
-    # Seeded payee "Biedronka" already has a prior transaction categorized
-    # into the Groceries envelope (infra/postgres/seed/seed_data.sql).
-    rule_response = await client.post(
-        "/budget/categorization-rules",
+async def test_a_rule_wins_over_where_the_payee_usually_goes(client):
+    """A rule you wrote beats history we inferred.
+
+    This used to be the other way round, which was defensible while rules matched
+    the description and history matched the payee. Now that both key off the
+    payee it is not: a rule for a payee you have already filed anywhere would
+    never fire, so it would be dead exactly for the payees you have most reason
+    to write one about.
+
+    The history is built here rather than borrowed from the seed data: the payee
+    needs a prior transaction in a specific envelope, and that is a fact about the
+    database that a test asserting on it should own.
+    """
+    history_envelope_id = await _create_envelope(client, "Where this payee usually goes")
+    rule_envelope_id = await _create_envelope(client, "Where the rule puts it")
+
+    payee = (await client.post("/budget/payees", json={"name": "Sklep Historyczny"})).json()
+    prior = await client.post(
+        "/budget/transactions",
         json={
-            "envelope_id": SEEDED_ENVELOPE_SUBSCRIPTIONS_ID,
-            "phrase": "SUPERMARKET",
+            "account_id": SEEDED_ACCOUNT_ID,
+            "envelope_id": history_envelope_id,
+            "payee_id": payee["id"],
+            "amount": "-30.00",
+            "currency": "PLN",
+            "transaction_date": "2026-01-15",
         },
+    )
+    assert prior.status_code == 201
+
+    rule_response = await client.post(
+        "/budget/categorization-rules",
+        json={"envelope_id": rule_envelope_id, "phrase": "Sklep"},
     )
     assert rule_response.status_code == 201
 
+    # The payee both matches the rule and carries history into a different
+    # envelope - the two deliberately disagree, so this can only pass one way.
     response = await client.post(
         "/budget/statements/upload",
         data={"account_id": SEEDED_ACCOUNT_ID},
@@ -221,7 +267,7 @@ async def test_upload_statement_prefers_payee_history_over_rule(client):
             "file": (
                 "feb.csv",
                 b"date,amount,description,payee\n"
-                b"2026-02-02,50.00,SUPERMARKET RUN,Biedronka\n",
+                b"2026-02-02,50.00,SUPERMARKET RUN,Sklep Historyczny\n",
                 "text/csv",
             )
         },
@@ -240,8 +286,46 @@ async def test_upload_statement_prefers_payee_history_over_rule(client):
     ).json()
     imported = [t for t in transactions if t["statement_id"] == statement["id"]]
     assert len(imported) == 1
-    assert imported[0]["envelope_id"] == SEEDED_ENVELOPE_GROCERIES_ID
+    assert imported[0]["envelope_id"] == rule_envelope_id
     assert imported[0]["categorization_source"] == "rule"
+
+
+async def test_a_rule_does_not_match_the_description(client):
+    """Rules narrowed to the payee, so a phrase that only appears in the
+    description no longer categorizes anything. The tradeoff of the narrowing:
+    a CSV with no payee column can no longer be filed by rules at all."""
+    envelope_id = await _create_envelope(client, "Should stay empty")
+    rule_response = await client.post(
+        "/budget/categorization-rules",
+        json={"envelope_id": envelope_id, "phrase": "PARKOMAT"},
+    )
+    assert rule_response.status_code == 201
+
+    response = await client.post(
+        "/budget/statements/upload",
+        data={"account_id": SEEDED_ACCOUNT_ID},
+        files={
+            "file": (
+                "feb.csv",
+                b"date,amount,description,payee\n"
+                b"2026-02-04,9.00,PARKOMAT STREFA A,Miasto Krakow\n",
+                "text/csv",
+            )
+        },
+    )
+    assert response.status_code == 201
+    statement = response.json()
+
+    transactions = (
+        await client.get(
+            "/budget/transactions",
+            params={"accountId": SEEDED_ACCOUNT_ID, "dateFrom": "2026-01-01", "dateTo": "2026-02-28"},
+        )
+    ).json()
+    imported = [t for t in transactions if t["statement_id"] == statement["id"]]
+    assert len(imported) == 1
+    assert imported[0]["envelope_id"] is None
+    assert imported[0]["categorization_source"] is None
 
 
 async def test_upload_statement_without_match_leaves_transaction_uncategorized(client):

@@ -3,6 +3,13 @@ from pathlib import Path
 import flet as ft
 
 from currency import CURRENCY_STORAGE_KEY, DEFAULT_CURRENCY, set_currency
+from preferences import (
+    ALERT_THRESHOLD_STORAGE_KEY,
+    DARK_MODE_STORAGE_KEY,
+    DEFAULT_ALERT_THRESHOLD,
+    set_alert_threshold,
+    set_dark_mode,
+)
 from routing import build_view, stack_for_route
 from theme import apply_theme, layout_band
 
@@ -18,25 +25,38 @@ from theme import apply_theme, layout_band
 ASSETS_DIR = str(Path(__file__).parent / "assets")
 
 
-async def _restore_currency(page: ft.Page) -> None:
-    """Load the currency saved by the Settings screen before anything renders.
+async def _saved(page: ft.Page, key: str):
+    """One stored preference, or `None` if it cannot be read.
 
-    Every screen formats its amounts at build time, so this has to happen before
-    the first `route_change()` or the app would paint once in the default currency
-    and only switch on the next navigation. Failures are swallowed: shared
-    preferences are unavailable in some hosts (and in tests), and an unreadable
-    preference is not a reason to refuse to start.
+    Failures are swallowed: shared preferences are unavailable in some hosts (and
+    in tests), and an unreadable preference is not a reason to refuse to start.
     """
     try:
-        saved = await page.shared_preferences.get(CURRENCY_STORAGE_KEY)
+        return await page.shared_preferences.get(key)
     except Exception:
-        saved = None
-    set_currency(saved if isinstance(saved, str) else DEFAULT_CURRENCY)
+        return None
+
+
+async def _restore_preferences(page: ft.Page) -> None:
+    """Load what the Settings screen saved, before anything renders.
+
+    Every screen formats its amounts - and resolves its envelope states, and the
+    colors that follow from them - at build time, so this has to happen before the
+    first `route_change()`. Otherwise the app paints once with the defaults and
+    only picks up the saved values on the next navigation.
+    """
+    currency = await _saved(page, CURRENCY_STORAGE_KEY)
+    set_currency(currency if isinstance(currency, str) else DEFAULT_CURRENCY)
+
+    threshold = await _saved(page, ALERT_THRESHOLD_STORAGE_KEY)
+    set_alert_threshold(DEFAULT_ALERT_THRESHOLD if threshold is None else threshold)
+
+    set_dark_mode(await _saved(page, DARK_MODE_STORAGE_KEY))
 
 
 async def main(page: ft.Page):
     page.title = "Envelo"
-    await _restore_currency(page)
+    await _restore_preferences(page)
     apply_theme(page)
 
     async def route_change(e=None):

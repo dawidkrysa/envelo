@@ -37,8 +37,33 @@ def range_to_dates(s: str) -> tuple[date, date]:
     return (date(year, month, 1), date(year, month, last_day))
 
 
-def to_envelope(e: dict, assigned: float, spent: float, target: float = 0) -> Envelope:
-    return Envelope(id=e["id"], name=e["name"], assigned=assigned, spent=spent, target=target)
+def to_envelope(
+    e: dict,
+    assigned: float,
+    spent: float,
+    target: float = 0,
+    carried_over: float = 0.0,
+    group_name: str = "",
+) -> Envelope:
+    """An API envelope row -> the display dataclass. `assigned`/`spent` are this
+    month's figures; `carried_over` is what was already in the envelope when the
+    month began (see `Envelope` and `views/common.BudgetSnapshot`).
+
+    `group_id` comes off the row itself; `group_name` has to be passed because
+    resolving it needs the category groups, which this function has no business
+    fetching. Callers that already hold them (anything built from a
+    `BudgetSnapshot`) pass it; the rest leave it empty, as before.
+    """
+    return Envelope(
+        id=e["id"],
+        name=e["name"],
+        assigned=assigned,
+        spent=spent,
+        target=target,
+        carried_over=carried_over,
+        group_id=e.get("category_group_id", "") or "",
+        group_name=group_name,
+    )
 
 
 def to_transaction(

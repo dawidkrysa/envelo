@@ -1,8 +1,8 @@
 """Modal dialogs - Assign money / Move money / Add-or-edit envelope / Add
-transaction read the form back out and call the API on confirm. Add category
-group / Add rule / Add account are still stubs (Confirm just closes) - not
-wired to the backend yet. See `utils.parse_amount`/`utils.parse_date` for the
-shared field-parsing helpers.
+transaction / Add-or-edit rule read the form back out and call the API on
+confirm. Add category group and Add account are still stubs (Confirm just
+closes) - not wired to the backend yet. See `utils.parse_amount`/
+`utils.parse_date` for the shared field-parsing helpers.
 """
 
 from collections.abc import Awaitable, Callable
@@ -14,15 +14,10 @@ import api_client
 from components.button import danger_button
 from components.modal_dialog import ModalField, build_modal
 from currency import format_money
-from mock_data import all_envelopes
 from theme import palette, text_style
 from utils import parse_amount, parse_date, range_to_dates
 
 _TEXT_STYLE = "height:40px;padding:0 12px;background:var(--sf);border:1px solid var(--line);border-radius:9px;font:400 13.5px/1 'IBM Plex Sans',sans-serif"
-
-
-def _envelope_options() -> list[tuple[str, str]]:
-    return [(e.id, f"{e.group_name} · {e.name}") for e in all_envelopes()]
 
 
 def _close(page: ft.Page):
@@ -379,59 +374,278 @@ def confirm_delete_dialog(
     return dialog
 
 
-def new_rule_dialog(page: ft.Page) -> ft.AlertDialog:
+def new_rule_dialog(
+    page: ft.Page,
+    *,
+    envelopes: list[dict] | None = None,
+    rule: dict | None = None,
+    on_saved: Callable[[], Awaitable[None]] | None = None,
+) -> ft.AlertDialog:
+    """Add and Edit share this one dialog, like `new_envelope_dialog` above.
+
+    One condition, not three. The dialog used to offer "Payee contains" /
+    "Description contains" / "Amount equals" against a model that has a single
+    `phrase` column - two of the three could not be saved, and the one that could
+    was matched against the description while the label said payee.
+    """
     p = palette(page)
     close = _close(page)
-    dialog, _ = build_modal(
+    envelope_options = [(e["id"], e["name"]) for e in (envelopes or [])]
+    error_text = ft.Text("", style=text_style(12, 500, p.over_ink))
+
+    async def handle_confirm(e: ft.ControlEvent) -> None:
+        error_text.value = ""
+
+        phrase = controls["Payee contains"].value.strip()
+        if not phrase:
+            error_text.value = "Enter something to match on."
+            page.update()
+            return
+
+        envelope_id = controls["Put it in"].value
+        if not envelope_id:
+            error_text.value = "Pick an envelope."
+            page.update()
+            return
+
+        payload = {"envelope_id": envelope_id, "phrase": phrase}
+        if rule is not None:
+            result = await api_client.update_categorization_rule(rule["id"], payload)
+        else:
+            result = await api_client.create_categorization_rule(payload)
+
+        if result is None:
+            error_text.value = "Couldn't save — try again."
+            page.update()
+            return
+
+        page.pop_dialog()
+        if on_saved is not None:
+            await on_saved()
+
+    dialog, controls = build_modal(
         p,
-        title="Add rule",
-        subtitle="Rules categorize matching transactions the moment you import them.",
+        title="Edit rule" if rule is not None else "Add rule",
+        subtitle="Rules file a transaction the moment you import it, based on who was paid.",
         fields=[
             ModalField(
-                "When",
-                "select",
-                options=[("payee", "Payee contains"), ("desc", "Description contains"), ("amount", "Amount equals")],
+                "Payee contains",
+                "input",
+                placeholder="e.g. Biedronka",
+                hint="Not case-sensitive. When several rules match, the longest phrase wins.",
+                value=rule["phrase"] if rule else "",
             ),
             ModalField(
-                "Pattern", "input", placeholder="e.g. Albert Heijn", hint="Not case-sensitive. Rules run top to bottom."
+                "Put it in",
+                "select",
+                options=envelope_options,
+                value=rule["envelope_id"] if rule else "",
             ),
-            ModalField("Put it in", "select", options=_envelope_options()),
         ],
-        cta_label="Add rule",
+        cta_label="Save changes" if rule is not None else "Add rule",
+        extra=error_text,
+        page=page,
         on_close=close,
-        on_confirm=close,
+        on_confirm=handle_confirm,
     )
     return dialog
 
 
-def new_account_dialog(page: ft.Page) -> ft.AlertDialog:
+ACCOUNT_TYPES = [
+    ("checking", "Checking"),
+    ("savings", "Savings"),
+    # `credit_card`, not `credit`: the value goes straight into the API's
+    # `AccountType` enum, and the stub offered a fourth value that does not
+    # exist there - so picking "Credit card" would have been rejected with a 422
+    # the moment this dialog was wired to anything.
+    ("credit_card", "Credit card"),
+    ("cash", "Cash"),
+]
+
+ACCOUNT_CURRENCIES = [
+    ("PLN", "Złoty (PLN)"),
+    ("EUR", "Euro (EUR)"),
+    ("USD", "US dollar (USD)"),
+    ("GBP", "Pound (GBP)"),
+]
+
+
+def new_account_dialog(
+    page: ft.Page,
+    *,
+    account: dict | None = None,
+    on_saved: Callable[[], Awaitable[None]] | None = None,
+) -> ft.AlertDialog:
+    """Add and Edit share this one dialog, like `new_envelope_dialog` above.
+
+    An account's currency is *not* the app's display currency (`currency.py`,
+    a per-session preference): it is what this account is actually denominated
+    in, and it is what its balance is reported in.
+    """
     p = palette(page)
     close = _close(page)
-    dialog, _ = build_modal(
+    error_text = ft.Text("", style=text_style(12, 500, p.over_ink))
+
+    async def handle_confirm(e: ft.ControlEvent) -> None:
+        error_text.value = ""
+
+        name = controls["Name"].value.strip()
+        if not name:
+            error_text.value = "Enter a name."
+            page.update()
+            return
+
+        account_type = controls["Type"].value
+        currency = controls["Currency"].value
+        if not account_type or not currency:
+            error_text.value = "Pick a type and a currency."
+            page.update()
+            return
+
+        payload = {"name": name, "type": account_type, "currency": currency}
+        if account is not None:
+            result = await api_client.update_account(account["id"], payload)
+        else:
+            result = await api_client.create_account(payload)
+
+        if result is None:
+            error_text.value = "Couldn't save — try again."
+            page.update()
+            return
+
+        page.pop_dialog()
+        if on_saved is not None:
+            await on_saved()
+
+    dialog, controls = build_modal(
         p,
-        title="Add account",
+        title="Edit account" if account is not None else "Add account",
         subtitle="Where your money actually sits. Statements are imported into an account.",
         fields=[
-            ModalField("Name", "input", placeholder="e.g. ING Checking"),
+            ModalField(
+                "Name",
+                "input",
+                placeholder="e.g. ING Checking",
+                value=account["name"] if account else "",
+            ),
             ModalField(
                 "Type",
                 "select",
-                options=[("checking", "Checking"), ("savings", "Savings"), ("credit", "Credit card"), ("cash", "Cash")],
+                options=ACCOUNT_TYPES,
+                value=account["type"] if account else "checking",
             ),
             ModalField(
                 "Currency",
                 "select",
-                options=[
-                    ("PLN", "Złoty (PLN)"),
-                    ("EUR", "Euro (EUR)"),
-                    ("USD", "US dollar (USD)"),
-                    ("GBP", "Pound (GBP)"),
-                ],
+                options=ACCOUNT_CURRENCIES,
+                value=account["currency"] if account else "PLN",
             ),
         ],
-        cta_label="Add account",
+        cta_label="Save changes" if account is not None else "Add account",
+        extra=error_text,
+        page=page,
         on_close=close,
-        on_confirm=close,
+        on_confirm=handle_confirm,
+    )
+    return dialog
+
+
+def rename_payee_dialog(
+    page: ft.Page,
+    *,
+    payee: dict,
+    on_saved: Callable[[], Awaitable[None]] | None = None,
+) -> ft.AlertDialog:
+    """Renaming is a `PUT`, so the payee keeps its id - and with it every
+    transaction behind it, including the history that decides where the next
+    import files this payee."""
+    p = palette(page)
+    close = _close(page)
+    error_text = ft.Text("", style=text_style(12, 500, p.over_ink))
+
+    async def handle_confirm(e: ft.ControlEvent) -> None:
+        error_text.value = ""
+
+        name = controls["Name"].value.strip()
+        if not name:
+            error_text.value = "Enter a name."
+            page.update()
+            return
+
+        if await api_client.update_payee(payee["id"], {"name": name}) is None:
+            error_text.value = "Couldn't save — try again."
+            page.update()
+            return
+
+        page.pop_dialog()
+        if on_saved is not None:
+            await on_saved()
+
+    dialog, controls = build_modal(
+        p,
+        title="Rename payee",
+        subtitle="Its transactions and history stay with it.",
+        fields=[ModalField("Name", "input", placeholder="e.g. Biedronka", value=payee["name"])],
+        cta_label="Save changes",
+        extra=error_text,
+        page=page,
+        on_close=close,
+        on_confirm=handle_confirm,
+    )
+    return dialog
+
+
+def merge_payee_dialog(
+    page: ft.Page,
+    *,
+    payee: dict,
+    payees: list[dict],
+    on_saved: Callable[[], Awaitable[None]] | None = None,
+) -> ft.AlertDialog:
+    """Folds `payee` into another one.
+
+    The direction matters and is easy to get backwards, so the copy names both
+    sides explicitly: this payee disappears, the chosen one survives with both
+    sets of transactions. The payee being merged is left out of its own list of
+    targets - merging something into itself would delete it and repoint its
+    transactions at a row that no longer exists (the server refuses it too).
+    """
+    p = palette(page)
+    close = _close(page)
+    error_text = ft.Text("", style=text_style(12, 500, p.over_ink))
+    options = [(other["id"], other["name"]) for other in payees if other["id"] != payee["id"]]
+
+    async def handle_confirm(e: ft.ControlEvent) -> None:
+        error_text.value = ""
+
+        into_id = controls["Merge into"].value
+        if not into_id:
+            error_text.value = "Pick the payee to keep."
+            page.update()
+            return
+
+        if await api_client.merge_payees(payee["id"], into_id) is None:
+            error_text.value = "Couldn't merge — try again."
+            page.update()
+            return
+
+        page.pop_dialog()
+        if on_saved is not None:
+            await on_saved()
+
+    dialog, controls = build_modal(
+        p,
+        title=f'Merge "{payee["name"]}"',
+        subtitle=(
+            f'"{payee["name"]}" will be deleted and its transactions moved to the payee you pick. '
+            "Use this when one shop was imported under several spellings."
+        ),
+        fields=[ModalField("Merge into", "select", options=options)],
+        cta_label="Merge",
+        extra=error_text,
+        page=page,
+        on_close=close,
+        on_confirm=handle_confirm,
     )
     return dialog
 

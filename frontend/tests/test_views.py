@@ -9,7 +9,11 @@ from types import SimpleNamespace
 
 import flet as ft
 import pytest
+from flet.messaging.session_store import SessionStore
 
+import api_client
+from currency import DEFAULT_CURRENCY, set_currency
+from preferences import DEFAULT_ALERT_THRESHOLD, set_alert_threshold, set_dark_mode
 from routing import VIEW_BUILDERS
 
 DEMO_ROUTES = list(VIEW_BUILDERS)
@@ -32,8 +36,12 @@ def stub_page(width: float | None = DESKTOP_WIDTH) -> SimpleNamespace:
     page.show_dialog = page.opened_dialogs.append
     page.pop_dialog = lambda: page.opened_dialogs.pop() if page.opened_dialogs else None
 
-    session_data: dict = {}
-    page.session = SimpleNamespace(get=session_data.get, set=session_data.__setitem__)
+    # Flet's own store, not a hand-rolled stand-in: the previous fake exposed
+    # `get`/`set` directly on `page.session`, which the real `Session` does not
+    # have (they live on `page.session.store`). Every test passed while both
+    # "open this envelope" paths crashed in the running app. Using the real
+    # class means the stub cannot drift from the API again.
+    page.session = SimpleNamespace(store=SessionStore())
 
     def run_task(fn, *args):
         page.last_task = asyncio.ensure_future(fn(*args))
@@ -86,6 +94,23 @@ async def _empty_page(*args, **kwargs) -> tuple[list, int]:
 
 
 @pytest.fixture(autouse=True)
+def reset_preferences():
+    """The currency and the alert threshold are module-level state (see
+    `currency.py` and `preferences.py`), so a test that changes one otherwise
+    hands it to whatever runs next.
+
+    That started to matter when the threshold began driving `envelope_state()`:
+    a leaked "warn me at 50%" would repaint envelopes amber in tests that never
+    mention Settings, and the failure would land in whichever test happened to
+    run afterwards.
+    """
+    yield
+    set_currency(DEFAULT_CURRENCY)
+    set_alert_threshold(DEFAULT_ALERT_THRESHOLD)
+    set_dark_mode(False)
+
+
+@pytest.fixture(autouse=True)
 def stub_transactions_api(monkeypatch):
     """`/transactions` fetches real data on build - stub it so this sweep never
     touches the network, per this module's own no-network contract above. Patched
@@ -99,23 +124,81 @@ def stub_transactions_api(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def stub_envelopes_api(monkeypatch):
-    """Same no-network contract as `stub_transactions_api` above, for `/envelopes`."""
-    monkeypatch.setattr("views.envelopes.get_envelopes", _empty_list)
-    monkeypatch.setattr("views.envelopes.get_category_groups", _empty_list)
-    monkeypatch.setattr("views.envelopes.get_envelope_allocations", _empty_list)
-    monkeypatch.setattr("views.envelopes.get_spent_by_envelope", _empty_map)
+    """Same no-network contract as `stub_transactions_api` above, for
+    `/envelopes`. The envelope-side reads come through
+    `views.common.fetch_budget_snapshot()` now, so they are stubbed by
+    `stub_shell_api` below rather than here."""
     monkeypatch.setattr("views.envelopes.get_to_assign", _zero)
 
 
 @pytest.fixture(autouse=True)
 def stub_dashboard_api(monkeypatch):
     """Same no-network contract as `stub_transactions_api` above, for `/dashboard`."""
-    monkeypatch.setattr("views.dashboard.get_envelopes", _empty_list)
-    monkeypatch.setattr("views.dashboard.get_envelope_allocations", _empty_list)
-    monkeypatch.setattr("views.dashboard.get_transactions", _empty_list)
+    monkeypatch.setattr("views.dashboard.get_transactions_page", _empty_page)
     monkeypatch.setattr("views.dashboard.get_payees", _empty_list)
-    monkeypatch.setattr("views.dashboard.get_spent_by_envelope", _empty_map)
     monkeypatch.setattr("views.dashboard.get_to_assign", _zero)
+
+
+@pytest.fixture(autouse=True)
+def stub_shell_api(monkeypatch):
+    """The four reads behind `common.fetch_budget_snapshot()` - the month's
+    envelopes, assignments and spending, shared by every screen's nav rail.
+
+    These were never stubbed before: the shell really did try the network in
+    every test and got away with it because `api_client` turns a refused
+    connection into an empty list. That is exactly the silence the Dashboard's
+    offline banner now exists to break, so leaving it unstubbed would put the
+    banner on screens under test."""
+    monkeypatch.setattr("views.common.get_category_groups", _empty_list)
+    monkeypatch.setattr("views.common.get_envelopes", _empty_list)
+    monkeypatch.setattr("views.common.get_envelope_allocations", _empty_list)
+    monkeypatch.setattr("views.common.get_spent_by_envelope", _empty_map)
+
+
+async def _empty_forecast(*args, **kwargs) -> dict:
+    """`get_forecast` hands back the server's own projection dict; `{}` is what it
+    returns when the read fails, and what an unstubbed screen must not have to
+    reach the network to find out."""
+    return {}
+
+
+@pytest.fixture(autouse=True)
+def stub_forecast_api(monkeypatch):
+    """Same no-network contract as `stub_transactions_api` above, for `/forecast`.
+    `/alerts` needs nothing of its own - it computes from the shell's snapshot."""
+    monkeypatch.setattr("views.forecast.get_forecast", _empty_forecast)
+
+
+@pytest.fixture(autouse=True)
+def stub_payees_api(monkeypatch):
+    """Same no-network contract as `stub_transactions_api` above, for `/payees`."""
+    monkeypatch.setattr("views.payees.get_payees", _empty_list)
+    monkeypatch.setattr("views.payees.get_payee_stats", _empty_map)
+    monkeypatch.setattr("views.payees.get_envelopes", _empty_list)
+
+
+@pytest.fixture(autouse=True)
+def stub_accounts_api(monkeypatch):
+    """Same no-network contract as `stub_transactions_api` above, for `/accounts`."""
+    monkeypatch.setattr("views.accounts.get_accounts", _empty_list)
+    monkeypatch.setattr("views.accounts.get_account_balances", _empty_map)
+
+
+@pytest.fixture(autouse=True)
+def stub_rules_api(monkeypatch):
+    """Same no-network contract as `stub_transactions_api` above, for `/rules`."""
+    monkeypatch.setattr("views.rules.get_categorization_rules", _empty_list)
+    monkeypatch.setattr("views.rules.get_envelopes", _empty_list)
+
+
+@pytest.fixture(autouse=True)
+def stub_first_run_api(monkeypatch):
+    """Same no-network contract as `stub_transactions_api` above, for
+    `/first-run`. Its three reads are its own: the screen has no nav rail, so it
+    does not go through `views.common.fetch_budget_snapshot()`."""
+    monkeypatch.setattr("views.first_run.get_accounts", _empty_list)
+    monkeypatch.setattr("views.first_run.get_statements", _empty_list)
+    monkeypatch.setattr("views.first_run.get_envelope_allocations", _empty_list)
 
 
 _DETAIL_ENVELOPE = [{"id": "env-1", "name": "Groceries", "category_group_id": "cg-1", "target_amount": None}]
@@ -138,6 +221,7 @@ def stub_envelope_detail_api(monkeypatch):
     monkeypatch.setattr("views.envelope_detail.get_envelope_allocations", _empty_list)
     monkeypatch.setattr("views.envelope_detail.get_transactions", _empty_list)
     monkeypatch.setattr("views.envelope_detail.get_spent_by_envelope", _empty_map)
+    monkeypatch.setattr("views.envelope_detail.get_transactions_page", _empty_page)
 
 
 @pytest.mark.parametrize("route", DEMO_ROUTES)
@@ -326,10 +410,10 @@ async def test_envelope_list_uses_real_assigned_spent_and_flags_over_limit(monke
     async def fake_get_to_assign():
         return 42.5
 
-    monkeypatch.setattr("views.envelopes.get_envelopes", fake_get_envelopes)
-    monkeypatch.setattr("views.envelopes.get_category_groups", fake_get_category_groups)
-    monkeypatch.setattr("views.envelopes.get_envelope_allocations", fake_get_envelope_allocations)
-    monkeypatch.setattr("views.envelopes.get_spent_by_envelope", fake_get_spent_by_envelope)
+    monkeypatch.setattr("views.common.get_envelopes", fake_get_envelopes)
+    monkeypatch.setattr("views.common.get_category_groups", fake_get_category_groups)
+    monkeypatch.setattr("views.common.get_envelope_allocations", fake_get_envelope_allocations)
+    monkeypatch.setattr("views.common.get_spent_by_envelope", fake_get_spent_by_envelope)
     monkeypatch.setattr("views.envelopes.get_to_assign", fake_get_to_assign)
 
     view = await VIEW_BUILDERS["/envelopes"](stub_page())
@@ -338,6 +422,56 @@ async def test_envelope_list_uses_real_assigned_spent_and_flags_over_limit(monke
     assert "Groceries" in texts
     assert f"{format_money(15)} over" in texts  # spent 65 - assigned 50 -> "over" state_label
     assert format_money(42.5) in texts  # "Left to assign" stat, from get_to_assign()
+
+
+async def test_ledger_keeps_assigned_monthly_while_left_carries_over(monkeypatch):
+    """The heart of the rollover split. "Assigned" is an editable field that
+    writes *this* month's allocation row, so it has to keep showing this month's
+    amount - while "Left" counts what is really in the envelope, carry-over
+    included. Rolling the two into one number would leave a field that displays
+    a running total and saves a monthly one, wiping out the difference on the
+    first edit."""
+    from currency import format_amount_bare, format_money
+    from utils import _shift_months, range_to_dates
+
+    date_from, _ = range_to_dates("this")
+    last_month = _shift_months(date_from, -1).isoformat()
+
+    async def fake_get_envelopes():
+        return [{"id": "env-1", "name": "Groceries", "category_group_id": "cg-1", "target_amount": None}]
+
+    async def fake_get_category_groups():
+        return [{"id": "cg-1", "name": "Everyday"}]
+
+    async def fake_get_envelope_allocations(envelope_id=None):
+        return [
+            {"id": "a0", "envelope_id": "env-1", "month": last_month, "assigned_amount": "500.00"},
+            {"id": "a1", "envelope_id": "env-1", "month": date_from.isoformat(), "assigned_amount": "100.00"},
+        ]
+
+    async def fake_get_spent_by_envelope(**kwargs):
+        # 300 spent last month, 40 so far this month.
+        return {"env-1": 40.0} if kwargs.get("date_from") is not None else {"env-1": 340.0}
+
+    async def fake_get_to_assign():
+        return 0.0
+
+    monkeypatch.setattr("views.common.get_envelopes", fake_get_envelopes)
+    monkeypatch.setattr("views.common.get_category_groups", fake_get_category_groups)
+    monkeypatch.setattr("views.common.get_envelope_allocations", fake_get_envelope_allocations)
+    monkeypatch.setattr("views.common.get_spent_by_envelope", fake_get_spent_by_envelope)
+    monkeypatch.setattr("views.envelopes.get_to_assign", fake_get_to_assign)
+
+    view = await VIEW_BUILDERS["/envelopes"](stub_page())
+    texts = [c.value for c in walk(view) if isinstance(c, ft.Text)]
+    fields = [c.value for c in walk(view) if isinstance(c, ft.TextField)]
+
+    # This month's assignment, not the 600 assigned across both months.
+    assert format_amount_bare(100) in fields
+    # 200 carried over + 100 assigned - 40 spent.
+    assert format_money(260) in texts
+    # Not "over": 40 spent against 300 available is comfortably on track.
+    assert not any("over" in (t or "") for t in texts)
 
 
 async def test_inline_assign_edit_creates_allocation_when_none_exists_yet(monkeypatch):
@@ -370,10 +504,10 @@ async def test_inline_assign_edit_creates_allocation_when_none_exists_yet(monkey
         calls["update"] = (allocation_id, payload)
         return {"id": allocation_id, **payload}
 
-    monkeypatch.setattr("views.envelopes.get_envelopes", fake_get_envelopes)
-    monkeypatch.setattr("views.envelopes.get_category_groups", fake_get_category_groups)
-    monkeypatch.setattr("views.envelopes.get_envelope_allocations", fake_get_envelope_allocations)
-    monkeypatch.setattr("views.envelopes.get_spent_by_envelope", fake_get_spent_by_envelope)
+    monkeypatch.setattr("views.common.get_envelopes", fake_get_envelopes)
+    monkeypatch.setattr("views.common.get_category_groups", fake_get_category_groups)
+    monkeypatch.setattr("views.common.get_envelope_allocations", fake_get_envelope_allocations)
+    monkeypatch.setattr("views.common.get_spent_by_envelope", fake_get_spent_by_envelope)
     monkeypatch.setattr("views.envelopes.get_to_assign", fake_get_to_assign)
     monkeypatch.setattr("views.envelopes.create_envelope_allocation", fake_create_envelope_allocation)
     monkeypatch.setattr("views.envelopes.update_envelope_allocation", fake_update_envelope_allocation)
@@ -420,10 +554,10 @@ async def test_fill_all_to_target_updates_existing_allocation(monkeypatch):
         calls["create"] = payload
         return {**payload, "id": "alloc-new"}
 
-    monkeypatch.setattr("views.envelopes.get_envelopes", fake_get_envelopes)
-    monkeypatch.setattr("views.envelopes.get_category_groups", fake_get_category_groups)
-    monkeypatch.setattr("views.envelopes.get_envelope_allocations", fake_get_envelope_allocations)
-    monkeypatch.setattr("views.envelopes.get_spent_by_envelope", fake_get_spent_by_envelope)
+    monkeypatch.setattr("views.common.get_envelopes", fake_get_envelopes)
+    monkeypatch.setattr("views.common.get_category_groups", fake_get_category_groups)
+    monkeypatch.setattr("views.common.get_envelope_allocations", fake_get_envelope_allocations)
+    monkeypatch.setattr("views.common.get_spent_by_envelope", fake_get_spent_by_envelope)
     monkeypatch.setattr("views.envelopes.get_to_assign", fake_get_to_assign)
     monkeypatch.setattr("views.envelopes.update_envelope_allocation", fake_update_envelope_allocation)
     monkeypatch.setattr("views.envelopes.create_envelope_allocation", fake_create_envelope_allocation)
@@ -462,10 +596,10 @@ async def test_add_envelope_dialog_creates_and_refreshes(monkeypatch):
         calls["create"] = payload
         return {**payload, "id": "env-new"}
 
-    monkeypatch.setattr("views.envelopes.get_envelopes", fake_get_envelopes)
-    monkeypatch.setattr("views.envelopes.get_category_groups", fake_get_category_groups)
-    monkeypatch.setattr("views.envelopes.get_envelope_allocations", fake_get_envelope_allocations)
-    monkeypatch.setattr("views.envelopes.get_spent_by_envelope", fake_get_spent_by_envelope)
+    monkeypatch.setattr("views.common.get_envelopes", fake_get_envelopes)
+    monkeypatch.setattr("views.common.get_category_groups", fake_get_category_groups)
+    monkeypatch.setattr("views.common.get_envelope_allocations", fake_get_envelope_allocations)
+    monkeypatch.setattr("views.common.get_spent_by_envelope", fake_get_spent_by_envelope)
     monkeypatch.setattr("views.envelopes.get_to_assign", fake_get_to_assign)
     monkeypatch.setattr("api_client.create_envelope", fake_create_envelope)
 
@@ -511,10 +645,10 @@ async def test_move_money_dialog_transfers_and_refreshes(monkeypatch):
         calls["transfer"] = payload
         return [{"id": "a1", **payload}, {"id": "a2", **payload}]
 
-    monkeypatch.setattr("views.envelopes.get_envelopes", fake_get_envelopes)
-    monkeypatch.setattr("views.envelopes.get_category_groups", fake_get_category_groups)
-    monkeypatch.setattr("views.envelopes.get_envelope_allocations", fake_get_envelope_allocations)
-    monkeypatch.setattr("views.envelopes.get_spent_by_envelope", fake_get_spent_by_envelope)
+    monkeypatch.setattr("views.common.get_envelopes", fake_get_envelopes)
+    monkeypatch.setattr("views.common.get_category_groups", fake_get_category_groups)
+    monkeypatch.setattr("views.common.get_envelope_allocations", fake_get_envelope_allocations)
+    monkeypatch.setattr("views.common.get_spent_by_envelope", fake_get_spent_by_envelope)
     monkeypatch.setattr("views.envelopes.get_to_assign", fake_get_to_assign)
     monkeypatch.setattr("api_client.transfer_envelope_allocation", fake_transfer)
 
@@ -570,10 +704,10 @@ async def test_assign_money_dialog_sets_absolute_amount(monkeypatch):
         calls["create"] = payload
         return {**payload, "id": "alloc-new"}
 
-    monkeypatch.setattr("views.envelopes.get_envelopes", fake_get_envelopes)
-    monkeypatch.setattr("views.envelopes.get_category_groups", fake_get_category_groups)
-    monkeypatch.setattr("views.envelopes.get_envelope_allocations", fake_get_envelope_allocations)
-    monkeypatch.setattr("views.envelopes.get_spent_by_envelope", fake_get_spent_by_envelope)
+    monkeypatch.setattr("views.common.get_envelopes", fake_get_envelopes)
+    monkeypatch.setattr("views.common.get_category_groups", fake_get_category_groups)
+    monkeypatch.setattr("views.common.get_envelope_allocations", fake_get_envelope_allocations)
+    monkeypatch.setattr("views.common.get_spent_by_envelope", fake_get_spent_by_envelope)
     monkeypatch.setattr("views.envelopes.get_to_assign", fake_get_to_assign)
     monkeypatch.setattr("views.envelopes.update_envelope_allocation", fake_update_envelope_allocation)
     monkeypatch.setattr("views.envelopes.create_envelope_allocation", fake_create_envelope_allocation)
@@ -633,10 +767,10 @@ async def test_clicking_an_envelope_navigates_to_its_own_detail_page(monkeypatch
     async def fake_get_accounts():
         return []
 
-    monkeypatch.setattr("views.envelopes.get_envelopes", fake_get_envelopes)
-    monkeypatch.setattr("views.envelopes.get_category_groups", fake_get_category_groups)
-    monkeypatch.setattr("views.envelopes.get_envelope_allocations", fake_get_envelope_allocations)
-    monkeypatch.setattr("views.envelopes.get_spent_by_envelope", fake_get_spent_by_envelope)
+    monkeypatch.setattr("views.common.get_envelopes", fake_get_envelopes)
+    monkeypatch.setattr("views.common.get_category_groups", fake_get_category_groups)
+    monkeypatch.setattr("views.common.get_envelope_allocations", fake_get_envelope_allocations)
+    monkeypatch.setattr("views.common.get_spent_by_envelope", fake_get_spent_by_envelope)
     monkeypatch.setattr("views.envelopes.get_to_assign", fake_get_to_assign)
     monkeypatch.setattr("views.envelope_detail.get_envelopes", fake_get_envelopes)
     monkeypatch.setattr("views.envelope_detail.get_category_groups", fake_get_category_groups)
@@ -653,7 +787,7 @@ async def test_clicking_an_envelope_navigates_to_its_own_detail_page(monkeypatch
     row = find_button(list_view, "Fun money")
     assert row is not None
     row.on_click(SimpleNamespace(control=row))
-    assert page.session.get("selected_envelope_id") == "env-2"
+    assert page.session.store.get("selected_envelope_id") == "env-2"
 
     detail_view = await VIEW_BUILDERS["/envelopes/detail"](page)
     title_texts = [c.value for c in walk(detail_view) if isinstance(c, ft.Text)]
@@ -683,10 +817,10 @@ async def test_add_category_group_dialog_creates_with_next_sort_order(monkeypatc
         calls["create"] = payload
         return {**payload, "id": "cg-new"}
 
-    monkeypatch.setattr("views.envelopes.get_envelopes", fake_get_envelopes)
-    monkeypatch.setattr("views.envelopes.get_category_groups", fake_get_category_groups)
-    monkeypatch.setattr("views.envelopes.get_envelope_allocations", fake_get_envelope_allocations)
-    monkeypatch.setattr("views.envelopes.get_spent_by_envelope", fake_get_spent_by_envelope)
+    monkeypatch.setattr("views.common.get_envelopes", fake_get_envelopes)
+    monkeypatch.setattr("views.common.get_category_groups", fake_get_category_groups)
+    monkeypatch.setattr("views.common.get_envelope_allocations", fake_get_envelope_allocations)
+    monkeypatch.setattr("views.common.get_spent_by_envelope", fake_get_spent_by_envelope)
     monkeypatch.setattr("views.envelopes.get_to_assign", fake_get_to_assign)
     monkeypatch.setattr("api_client.create_category_group", fake_create_category_group)
 
@@ -765,17 +899,20 @@ def _stub_envelopes_api(monkeypatch, *, envelopes, category_groups, allocations=
         calls["envelope"] = (envelope_id, payload)
         return {"id": envelope_id, **payload}
 
-    for name, fake in [
-        ("get_envelopes", fake_get_envelopes),
-        ("get_category_groups", fake_get_category_groups),
-        ("get_envelope_allocations", fake_get_envelope_allocations),
-        ("get_spent_by_envelope", fake_get_spent_by_envelope),
-        ("get_to_assign", fake_get_to_assign),
-        ("create_envelope_allocation", fake_create_envelope_allocation),
-        ("update_envelope_allocation", fake_update_envelope_allocation),
-        ("update_envelope", fake_update_envelope),
+    # The reads live on `views.common` (the screen gets them through
+    # `fetch_budget_snapshot()`, shared with the nav rail); the writes are still
+    # `views/envelopes.py`'s own.
+    for module, name, fake in [
+        ("common", "get_envelopes", fake_get_envelopes),
+        ("common", "get_category_groups", fake_get_category_groups),
+        ("common", "get_envelope_allocations", fake_get_envelope_allocations),
+        ("common", "get_spent_by_envelope", fake_get_spent_by_envelope),
+        ("envelopes", "get_to_assign", fake_get_to_assign),
+        ("envelopes", "create_envelope_allocation", fake_create_envelope_allocation),
+        ("envelopes", "update_envelope_allocation", fake_update_envelope_allocation),
+        ("envelopes", "update_envelope", fake_update_envelope),
     ]:
-        monkeypatch.setattr(f"views.envelopes.{name}", fake)
+        monkeypatch.setattr(f"views.{module}.{name}", fake)
     return calls
 
 
@@ -824,6 +961,75 @@ async def test_dropping_an_envelope_back_on_its_own_group_writes_nothing(monkeyp
 
     assert calls["envelope"] is None
     assert page.last_task is None
+
+
+async def test_deleting_an_envelope_warns_what_happens_to_its_transactions(monkeypatch):
+    """Deleting is allowed even when the envelope has history - the server
+    uncategorises those transactions rather than refusing - so the confirmation
+    has to say so before the user commits to it, not after."""
+
+    async def fake_page(**kwargs):
+        return [], 12
+
+    monkeypatch.setattr("views.envelope_detail.get_transactions_page", fake_page)
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/envelopes/detail"](page)
+
+    button = find_button(view, "Delete envelope")
+    assert button is not None
+    button.on_click(SimpleNamespace(control=button))
+
+    dialog = page.opened_dialogs[0]
+    texts = " ".join(c.value or "" for c in walk(dialog) if isinstance(c, ft.Text))
+    assert "12 transactions" in texts
+    assert "uncategorised" in texts
+    assert "to assign" in texts
+
+
+async def test_delete_confirmation_stays_plain_for_an_untouched_envelope(monkeypatch):
+    """Nothing to warn about when the envelope has no transactions."""
+    page = stub_page()
+    view = await VIEW_BUILDERS["/envelopes/detail"](page)
+
+    button = find_button(view, "Delete envelope")
+    button.on_click(SimpleNamespace(control=button))
+
+    dialog = page.opened_dialogs[0]
+    texts = " ".join(c.value or "" for c in walk(dialog) if isinstance(c, ft.Text))
+    assert "uncategorised" not in texts
+    assert "can't be undone" in texts
+
+
+async def test_hovering_a_group_outlines_it_without_tinting_its_envelopes(monkeypatch):
+    """The drop zone used to be filled with `ok_fill`, which tinted every row in
+    the group green - it read as "all of these are selected" while only the one
+    under the cursor was moving. An outline makes the same promise about where
+    the envelope lands without saying anything about the rows."""
+    _two_groups(monkeypatch)
+    page = stub_page()
+    view = await VIEW_BUILDERS["/envelopes"](page)
+
+    target = _drop_target_for(view, "Fun")
+    target.on_will_accept(SimpleNamespace(src=SimpleNamespace(data="env-1")))
+
+    holder = target.content
+    assert holder.bgcolor is None, "the group must not be filled"
+    assert holder.border is not None
+    assert holder.border.top.color != "transparent"
+
+
+async def test_hovering_an_envelopes_own_group_does_not_light_up(monkeypatch):
+    """Dropping back where it already is is a documented no-op, so promising a
+    move there is a lie the highlight should not tell."""
+    _two_groups(monkeypatch)
+    page = stub_page()
+    view = await VIEW_BUILDERS["/envelopes"](page)
+
+    target = _drop_target_for(view, "Everyday")  # env-1 already lives in cg-1
+    target.on_will_accept(SimpleNamespace(src=SimpleNamespace(data="env-1")))
+
+    assert target.content.border.top.color == "transparent"
 
 
 async def test_every_ledger_row_offers_a_drag_handle(monkeypatch):
@@ -964,6 +1170,34 @@ async def test_currency_selector_switches_and_persists(monkeypatch):
     assert len(rebuilt) == 1
 
 
+def _options(count: int) -> list[tuple[str, str]]:
+    return [(f"o{i}", f"Option {i}") for i in range(count)]
+
+
+async def test_a_short_dropdown_is_left_to_size_itself():
+    """`menu_height` is a fixed height, not a maximum, so giving every picker the
+    same cap draws a two-option menu as 300px of mostly empty box."""
+    from components.select_field import THRESHOLD_FOR_SCROLL, select_field
+    from theme import palette
+
+    p = palette(stub_page())
+
+    assert select_field(p, _options(2)).menu_height is None
+    assert select_field(p, _options(THRESHOLD_FOR_SCROLL)).menu_height is None
+
+
+async def test_a_long_dropdown_scrolls_instead_of_running_off_the_screen():
+    """A budget with thirty envelopes opened one menu the height of the window."""
+    from components.select_field import SCROLLING_MENU_HEIGHT, THRESHOLD_FOR_SCROLL, select_field
+    from theme import palette
+
+    p = palette(stub_page())
+    long_menu = select_field(p, _options(THRESHOLD_FOR_SCROLL + 1))
+
+    assert long_menu.menu_height == SCROLLING_MENU_HEIGHT
+    assert select_field(p, _options(40)).menu_height == SCROLLING_MENU_HEIGHT
+
+
 async def test_currency_options_are_offered_in_the_currency_registry_order():
     view = await VIEW_BUILDERS["/settings"](stub_page())
     from currency import CURRENCIES
@@ -975,24 +1209,24 @@ async def test_saved_currency_is_restored_before_anything_renders():
     """`main()` has to apply it before the first route change - every screen bakes
     its formatted amounts in at build time."""
     from currency import CURRENCY_STORAGE_KEY, current_currency
-    from main import _restore_currency
+    from main import _restore_preferences
 
     page = SimpleNamespace(shared_preferences=SimpleNamespace(get=lambda key: _async_return("gbp")))
-    await _restore_currency(page)
+    await _restore_preferences(page)
     assert current_currency() == "gbp"
     assert CURRENCY_STORAGE_KEY  # the key both sides share
 
 
 async def test_unreadable_currency_preference_does_not_block_startup():
-    from currency import DEFAULT_CURRENCY, current_currency, set_currency
-    from main import _restore_currency
+    from currency import current_currency
+    from main import _restore_preferences
 
     set_currency("usd")
 
     async def boom(key):
         raise RuntimeError("shared preferences unavailable")
 
-    await _restore_currency(SimpleNamespace(shared_preferences=SimpleNamespace(get=boom)))
+    await _restore_preferences(SimpleNamespace(shared_preferences=SimpleNamespace(get=boom)))
     assert current_currency() == DEFAULT_CURRENCY
 
 
@@ -1120,29 +1354,65 @@ async def test_dialog_fields_are_all_the_same_size():
 # --- Dashboard: real data, no mocks ----------------------------------------
 
 
-def _stub_dashboard(monkeypatch, *, envelopes, allocations=(), transactions=(), payees=(), spent=None, to_assign=0.0):
+def _stub_dashboard(
+    monkeypatch,
+    *,
+    envelopes,
+    allocations=(),
+    transactions=(),
+    payees=(),
+    spent=None,
+    spent_this_month=None,
+    to_assign=0.0,
+    category_groups=(),
+    page_calls=None,
+):
+    """The envelope-side reads are patched on `views.common`, not
+    `views.dashboard`: the screen gets them through
+    `common.fetch_budget_snapshot()`, which it shares with the nav rail so the
+    two don't fetch the same month twice.
+
+    `transactions` is what the *server* would return for the latest-rows page -
+    already ordered newest-first - because the screen no longer re-sorts it.
+    Pass `page_calls` a list to capture the kwargs it was asked for.
+
+    `spent` is the cumulative figure (everything up to the end of this month);
+    `spent_this_month` is the narrower one, and defaults to `spent` for the
+    common case where a test only has this month's data. The snapshot asks for
+    both and tells them apart by whether `date_from` was given.
+    """
+
     async def _envelopes():
         return list(envelopes)
 
     async def _allocations(envelope_id=None):
         return list(allocations)
 
-    async def _transactions(**kwargs):
-        return list(transactions)
+    async def _groups():
+        return list(category_groups)
+
+    async def _transactions_page(**kwargs):
+        if page_calls is not None:
+            page_calls.append(kwargs)
+        rows = list(transactions)
+        return rows[: kwargs.get("limit", len(rows))], len(rows)
 
     async def _payees():
         return list(payees)
 
     async def _spent(**kwargs):
-        return dict(spent or {})
+        if kwargs.get("date_from") is None:
+            return dict(spent or {})
+        return dict(spent or {} if spent_this_month is None else spent_this_month)
 
     async def _to_assign():
         return to_assign
 
-    monkeypatch.setattr("views.dashboard.get_spent_by_envelope", _spent)
-    monkeypatch.setattr("views.dashboard.get_envelopes", _envelopes)
-    monkeypatch.setattr("views.dashboard.get_envelope_allocations", _allocations)
-    monkeypatch.setattr("views.dashboard.get_transactions", _transactions)
+    monkeypatch.setattr("views.common.get_spent_by_envelope", _spent)
+    monkeypatch.setattr("views.common.get_envelopes", _envelopes)
+    monkeypatch.setattr("views.common.get_envelope_allocations", _allocations)
+    monkeypatch.setattr("views.common.get_category_groups", _groups)
+    monkeypatch.setattr("views.dashboard.get_transactions_page", _transactions_page)
     monkeypatch.setattr("views.dashboard.get_payees", _payees)
     monkeypatch.setattr("views.dashboard.get_to_assign", _to_assign)
 
@@ -1232,16 +1502,8 @@ async def test_dashboard_lists_the_latest_transactions_with_resolved_names(monke
     _stub_dashboard(
         monkeypatch,
         envelopes=[{"id": "env-1", "name": "Groceries", "category_group_id": "cg-1", "target_amount": None}],
+        # Newest first, as the server returns them.
         transactions=[
-            {
-                "id": "old",
-                "envelope_id": "env-1",
-                "payee_id": "p1",
-                "account_id": "a",
-                "amount": "-10.00",
-                "transaction_date": "2026-01-02",
-                "categorization_source": "rule",
-            },
             {
                 "id": "new",
                 "envelope_id": "env-1",
@@ -1249,6 +1511,15 @@ async def test_dashboard_lists_the_latest_transactions_with_resolved_names(monke
                 "account_id": "a",
                 "amount": "-20.00",
                 "transaction_date": "2026-08-01",
+                "categorization_source": "rule",
+            },
+            {
+                "id": "old",
+                "envelope_id": "env-1",
+                "payee_id": "p1",
+                "account_id": "a",
+                "amount": "-10.00",
+                "transaction_date": "2026-01-02",
                 "categorization_source": "rule",
             },
         ],
@@ -1260,6 +1531,90 @@ async def test_dashboard_lists_the_latest_transactions_with_resolved_names(monke
     assert "Żabka" in texts
     # Payee and envelope ids are resolved to names, never shown raw.
     assert not any("p2" == t or "env-1" == t for t in texts)
+
+
+def _last_month(day: int = 1) -> str:
+    from utils import _shift_months, range_to_dates
+
+    return _shift_months(range_to_dates("this")[0], -1).replace(day=day).isoformat()
+
+
+async def test_dashboard_carries_last_months_leftover_into_this_month(monkeypatch):
+    """Money assigned in a past month and never spent is still in the envelope.
+
+    It used to be counted nowhere: the envelope reset to this month's own
+    assignment, while `to_assign` had already subtracted the old one - so every
+    month that passed pushed "Safe to spend" further below the truth."""
+    from currency import format_money
+
+    _stub_dashboard(
+        monkeypatch,
+        envelopes=[{"id": "env-1", "name": "Groceries", "category_group_id": "cg-1", "target_amount": None}],
+        allocations=[
+            {"id": "a1", "envelope_id": "env-1", "month": _last_month(), "assigned_amount": "500.00"},
+            {"id": "a2", "envelope_id": "env-1", "month": _this_month(1), "assigned_amount": "500.00"},
+        ],
+        spent={"env-1": 300.0},  # all of it last month
+        spent_this_month={},
+    )
+
+    view = await VIEW_BUILDERS["/dashboard"](stub_page())
+    texts = [c.value for c in walk(view) if isinstance(c, ft.Text)]
+    # 1000 assigned across the two months, 300 of it spent.
+    assert format_money(700) in texts
+
+
+async def test_dashboard_ranks_busiest_envelopes_by_this_month(monkeypatch):
+    """"Busiest" is about what moved recently, so a big lifetime total must not
+    outrank an envelope that is actually being used right now."""
+    _stub_dashboard(
+        monkeypatch,
+        envelopes=[
+            {"id": "env-1", "name": "Old favourite", "category_group_id": "cg-1", "target_amount": None},
+            {"id": "env-2", "name": "Busy now", "category_group_id": "cg-1", "target_amount": None},
+        ],
+        allocations=[
+            {"id": "a1", "envelope_id": "env-1", "month": _this_month(1), "assigned_amount": "900.00"},
+            {"id": "a2", "envelope_id": "env-2", "month": _this_month(1), "assigned_amount": "900.00"},
+        ],
+        spent={"env-1": 800.0, "env-2": 50.0},
+        spent_this_month={"env-2": 50.0},
+    )
+
+    view = await VIEW_BUILDERS["/dashboard"](stub_page())
+    texts = [c.value for c in walk(view) if isinstance(c, ft.Text)]
+    assert "Busy now" in texts
+    assert "Old favourite" not in texts
+
+
+async def test_dashboard_and_its_nav_rail_share_one_fetch(monkeypatch):
+    """The nav rail is chrome built independently of the screen inside it, so it
+    used to fetch the month's envelopes/assignments/spending a second time."""
+    calls: list[str] = []
+
+    async def _counted():
+        calls.append("envelopes")
+        return []
+
+    _stub_dashboard(monkeypatch, envelopes=[])
+    monkeypatch.setattr("views.common.get_envelopes", _counted)
+
+    await VIEW_BUILDERS["/dashboard"](stub_page())
+
+    assert len(calls) == 1
+
+
+async def test_dashboard_asks_the_server_for_only_the_rows_it_shows(monkeypatch):
+    """It used to pull up to 100 transactions to render four, then re-sort them
+    by date alone - breaking ties differently from the Transactions screen."""
+    from views.dashboard import _MAX_ROWS
+
+    calls: list[dict] = []
+    _stub_dashboard(monkeypatch, envelopes=[], page_calls=calls)
+
+    await VIEW_BUILDERS["/dashboard"](stub_page())
+
+    assert calls == [{"limit": _MAX_ROWS}]
 
 
 async def test_dashboard_rows_open_the_envelope_they_name(monkeypatch):
@@ -1299,7 +1654,7 @@ async def test_dashboard_rows_open_the_envelope_they_name(monkeypatch):
     )
     row.on_click(SimpleNamespace(control=row))
 
-    assert page.session.get("selected_envelope_id") == "env-9"
+    assert page.session.store.get("selected_envelope_id") == "env-9"
     assert routed == ["/envelopes/detail"]
 
 
@@ -1309,13 +1664,77 @@ async def test_dashboard_survives_a_completely_empty_budget(monkeypatch):
     texts = [c.value for c in walk(view) if isinstance(c, ft.Text)]
     assert "Nothing spent this month yet." in texts
     assert "No transactions imported yet." in texts
+    # An empty budget is not an outage, and must not be reported as one.
+    assert not any("Couldn't reach the server" in (t or "") for t in texts)
+
+
+async def test_dashboard_says_so_when_the_server_is_unreachable(monkeypatch):
+    """An unreachable gateway used to render a confident "0,00 zł safe to spend"
+    over empty cards - indistinguishable from a budget with nothing in it."""
+    import httpx
+
+    async def _boom(*args, **kwargs):
+        raise httpx.ConnectError("connection refused")
+
+    _stub_dashboard(monkeypatch, envelopes=[])
+    monkeypatch.setattr("api_client._client", lambda: SimpleNamespace(get=_boom))
+    # Straight through `api_client`, so the real except/`_note_failure` path runs.
+    monkeypatch.setattr("views.dashboard.get_to_assign", api_client.get_to_assign)
+
+    view = await VIEW_BUILDERS["/dashboard"](stub_page())
+    texts = [c.value for c in walk(view) if isinstance(c, ft.Text)]
+    assert any("Couldn't reach the server" in (t or "") for t in texts)
+
+
+async def test_dashboard_empty_list_from_a_404_is_not_an_outage(monkeypatch):
+    """The gateway answers "no rows" with 404 on its list endpoints, so counting
+    404s as failures would put an outage banner over every empty budget."""
+    import httpx
+
+    async def _not_found(*args, **kwargs):
+        request = httpx.Request("GET", "http://test/budget/payees")
+        raise httpx.HTTPStatusError("nope", request=request, response=httpx.Response(404, request=request))
+
+    _stub_dashboard(monkeypatch, envelopes=[])
+    monkeypatch.setattr("api_client._client", lambda: SimpleNamespace(get=_not_found))
+    monkeypatch.setattr("views.dashboard.get_payees", api_client.get_payees)
+
+    view = await VIEW_BUILDERS["/dashboard"](stub_page())
+    texts = [c.value for c in walk(view) if isinstance(c, ft.Text)]
+    assert not any("Couldn't reach the server" in (t or "") for t in texts)
+
+
+async def test_dashboard_keeps_the_latest_transactions_on_a_phone(monkeypatch):
+    """The card used to be dropped below tablet width, which took "what just left
+    my account" off the screen it matters most on."""
+    _stub_dashboard(
+        monkeypatch,
+        envelopes=[{"id": "env-1", "name": "Groceries", "category_group_id": "cg-1", "target_amount": None}],
+        transactions=[
+            {
+                "id": "t1",
+                "envelope_id": "env-1",
+                "payee_id": "p1",
+                "account_id": "a",
+                "amount": "-20.00",
+                "transaction_date": _this_month(3),
+                "categorization_source": "rule",
+            }
+        ],
+        payees=[{"id": "p1", "name": "Żabka"}],
+    )
+
+    view = await VIEW_BUILDERS["/dashboard"](stub_page(MOBILE_WIDTH))
+    texts = [c.value for c in walk(view) if isinstance(c, ft.Text)]
+    assert "LATEST TRANSACTIONS" in texts
+    assert "Żabka" in texts
 
 
 async def test_sidebar_attention_badge_counts_real_envelopes(monkeypatch):
     """It was `len(attention_envelopes())` over the static mock, so the badge
     showed the same number forever, right next to real group totals."""
     from theme import palette
-    from views.common import category_group_nav
+    from views.common import category_group_nav, fetch_budget_snapshot
 
     month = _this_month(1)
 
@@ -1343,10 +1762,1585 @@ async def test_sidebar_attention_badge_counts_real_envelopes(monkeypatch):
     monkeypatch.setattr("views.common.get_envelope_allocations", _allocations)
 
     page = stub_page()
-    items, attention = await category_group_nav(palette(page), page)
+    items, attention = category_group_nav(palette(page), page, await fetch_budget_snapshot())
 
     assert len(items) == 1
     assert attention == 1  # Groceries is over; Rent is untouched
+
+
+async def test_settings_link_under_the_username_navigates(monkeypatch):
+    """It used to be `on_click=lambda: navigate(...)` - Flet always calls
+    on_click with the event, so a zero-arg lambda raised the moment this was
+    actually clicked rather than navigating anywhere."""
+    from components.nav_rail import build_nav
+    from theme import palette
+
+    routed: list[str] = []
+    nav = build_nav(palette(stub_page()), "desktop", "dashboard", routed.append)
+
+    settings_link = next(
+        c
+        for c in walk(nav)
+        if isinstance(c, ft.Container)
+        and getattr(c, "on_click", None) is not None
+        and isinstance(c.content, ft.Text)
+        and c.content.value == "Settings"
+    )
+    settings_link.on_click(SimpleNamespace(control=settings_link))
+
+    assert routed == ["/settings"]
+
+
+def _category_group_header(nav) -> ft.Container:
+    return next(
+        c
+        for c in walk(nav)
+        if isinstance(c, ft.Container)
+        and getattr(c, "on_click", None) is not None
+        and isinstance(c.content, ft.Row)
+        and any(isinstance(t, ft.Text) and t.value == "CATEGORY GROUPS" for t in c.content.controls)
+    )
+
+
+async def test_category_groups_list_can_be_collapsed_and_expanded(monkeypatch):
+    """A budget with a dozen groups pushed the user footer - and Settings below
+    it - off the bottom of the sidebar, with no scrollbar hinting anything was
+    cut off. Collapsing the list is the fix."""
+    from views.common import CATEGORY_GROUPS_COLLAPSED_KEY
+
+    _stub_envelopes_api(
+        monkeypatch,
+        envelopes=[{"id": "env-1", "name": "Groceries", "category_group_id": "cg-1", "target_amount": None}],
+        category_groups=[{"id": "cg-1", "name": "Everyday"}],
+    )
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/dashboard"](page)
+    nav = view.controls[0].controls[0]  # nav_holder is the Row's first child on desktop
+
+    assert any(isinstance(c, ft.Text) and c.value == "Everyday" for c in walk(nav))
+
+    _category_group_header(nav).on_click(SimpleNamespace(control=None))
+    await page.last_task
+
+    assert page.session.store.get(CATEGORY_GROUPS_COLLAPSED_KEY) is True
+    rebuilt_nav = view.controls[0].controls[0]
+    assert not any(isinstance(c, ft.Text) and c.value == "Everyday" for c in walk(rebuilt_nav))
+    # The header itself survives collapsing - it is what you click to reopen it.
+    assert any(isinstance(c, ft.Text) and c.value == "CATEGORY GROUPS" for c in walk(rebuilt_nav))
+
+    _category_group_header(rebuilt_nav).on_click(SimpleNamespace(control=None))
+    await page.last_task
+
+    assert page.session.store.get(CATEGORY_GROUPS_COLLAPSED_KEY) is False
+    assert any(isinstance(c, ft.Text) and c.value == "Everyday" for c in walk(view.controls[0].controls[0]))
+
+
+# --- Forecast: the projection is the server's, and this screen renders it ----
+
+
+def _stub_forecast(monkeypatch, *, forecast, envelopes=(), category_groups=()):
+    """`envelopes`/`category_groups` are the shell snapshot's - the Forecast screen
+    only needs them for names, since the forecast itself speaks in ids.
+
+    The projection is never derived here: whatever `forecast` says is what the
+    screen must show, which is the whole reason the endpoint exists.
+    """
+
+    async def _forecast(month=None, as_of=None):
+        return dict(forecast)
+
+    async def _envelopes():
+        return list(envelopes)
+
+    async def _groups():
+        return list(category_groups)
+
+    monkeypatch.setattr("views.forecast.get_forecast", _forecast)
+    monkeypatch.setattr("views.common.get_envelopes", _envelopes)
+    monkeypatch.setattr("views.common.get_category_groups", _groups)
+
+
+_TWO_ENVELOPES = [
+    {"id": "env-1", "name": "Groceries", "category_group_id": "cg-1", "target_amount": None},
+    {"id": "env-2", "name": "Hobbies", "category_group_id": "cg-1", "target_amount": None},
+]
+
+
+def _forecast_payload(**overrides) -> dict:
+    payload = {
+        "month": _this_month(1),
+        "as_of": _this_month(15),
+        "elapsed_fraction": "0.4839",
+        "method": "linear-pace",
+        "funded_total": "300.00",
+        "spent_total": "200.00",
+        "projected_total": "413.30",
+        "category_groups": [
+            {"category_group_id": "cg-1", "funded": "300.00", "spent": "200.00", "projected": "413.30"}
+        ],
+        "envelopes": [
+            {
+                "envelope_id": "env-1",
+                "category_group_id": "cg-1",
+                "carried_over": "0.00",
+                "assigned": "100.00",
+                "funded": "100.00",
+                "spent": "90.00",
+                "projected": "186.00",
+            },
+            {
+                "envelope_id": "env-2",
+                "category_group_id": "cg-1",
+                "carried_over": "0.00",
+                "assigned": "200.00",
+                "funded": "200.00",
+                "spent": "110.00",
+                "projected": "227.30",
+            },
+        ],
+    }
+    payload.update(overrides)
+    return payload
+
+
+async def test_forecast_shows_the_projection_the_server_sent(monkeypatch):
+    """It used to pace the mock's spending itself, with a hardcoded 31-day month.
+    The numbers now arrive computed, so a real predictive model can replace the
+    estimator without this screen changing."""
+    from currency import format_money
+
+    _stub_forecast(
+        monkeypatch,
+        forecast=_forecast_payload(),
+        envelopes=_TWO_ENVELOPES,
+        category_groups=[{"id": "cg-1", "name": "Everyday"}],
+    )
+
+    view = await VIEW_BUILDERS["/forecast"](stub_page())
+    texts = [c.value for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert format_money(413.30) in texts  # projected, verbatim
+    assert format_money(300.00) in texts  # what the envelopes hold
+    assert format_money(113.30) in texts  # the difference between the two
+
+
+async def test_forecast_compares_against_what_the_envelopes_hold(monkeypatch):
+    """The baseline is `funded`, not this month's assignment - and the legend has
+    to say so. It read "Assigned", which stopped being the comparison the moment
+    envelopes started carrying money over."""
+    _stub_forecast(
+        monkeypatch,
+        forecast=_forecast_payload(),
+        envelopes=_TWO_ENVELOPES,
+        category_groups=[{"id": "cg-1", "name": "Everyday"}],
+    )
+
+    view = await VIEW_BUILDERS["/forecast"](stub_page())
+    texts = [c.value for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "Available" in texts
+    assert "Assigned" not in texts
+
+
+async def test_forecast_legend_names_the_real_end_of_the_month(monkeypatch):
+    """"Projected by the 31st" was hardcoded - a date February does not have."""
+    from dates import month_end_label
+
+    _stub_forecast(
+        monkeypatch,
+        forecast=_forecast_payload(),
+        envelopes=_TWO_ENVELOPES,
+        category_groups=[{"id": "cg-1", "name": "Everyday"}],
+    )
+
+    view = await VIEW_BUILDERS["/forecast"](stub_page())
+    texts = [c.value for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert f"Projected by {month_end_label()}" in texts
+
+
+async def test_forecast_says_which_estimator_produced_it(monkeypatch):
+    """A straight-line guess presented without explanation invites more
+    confidence than it has earned."""
+    _stub_forecast(
+        monkeypatch,
+        forecast=_forecast_payload(),
+        envelopes=_TWO_ENVELOPES,
+        category_groups=[{"id": "cg-1", "name": "Everyday"}],
+    )
+
+    view = await VIEW_BUILDERS["/forecast"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any("Straight-line pace" in t for t in texts)
+
+
+async def test_forecast_describes_an_estimator_it_has_never_heard_of(monkeypatch):
+    """New estimators will appear in `method`; an unrecognised one must be named,
+    not silently dropped as if the projection came from nowhere."""
+    _stub_forecast(
+        monkeypatch,
+        forecast=_forecast_payload(method="seasonal-v2"),
+        envelopes=_TWO_ENVELOPES,
+        category_groups=[{"id": "cg-1", "name": "Everyday"}],
+    )
+
+    view = await VIEW_BUILDERS["/forecast"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any('Estimated by "seasonal-v2"' in t for t in texts)
+
+
+async def test_forecast_keeps_the_servers_ranking(monkeypatch):
+    """Most at risk first, as ordered by whatever produced the projection. A
+    client re-sorting by its own rule would overrule a model that has a view on
+    which risk matters."""
+    # Deliberately contradicts what a client-side "sort by overshoot" would do:
+    # Groceries leads the payload while overshooting by 20, Hobbies follows while
+    # overshooting by 100. Only a screen that keeps the server's order passes.
+    _stub_forecast(
+        monkeypatch,
+        forecast=_forecast_payload(
+            envelopes=[
+                {
+                    "envelope_id": "env-1",
+                    "category_group_id": "cg-1",
+                    "carried_over": "0.00",
+                    "assigned": "100.00",
+                    "funded": "100.00",
+                    "spent": "60.00",
+                    "projected": "120.00",
+                },
+                {
+                    "envelope_id": "env-2",
+                    "category_group_id": "cg-1",
+                    "carried_over": "0.00",
+                    "assigned": "200.00",
+                    "funded": "200.00",
+                    "spent": "150.00",
+                    "projected": "300.00",
+                },
+            ]
+        ),
+        envelopes=_TWO_ENVELOPES,
+        category_groups=[{"id": "cg-1", "name": "Everyday"}],
+    )
+
+    view = await VIEW_BUILDERS["/forecast"](stub_page())
+    names = [c.value for c in walk(view) if isinstance(c, ft.Text) and c.value in {"Groceries", "Hobbies"}]
+
+    assert names == ["Groceries", "Hobbies"]
+
+
+async def test_forecast_only_flags_envelopes_projected_past_what_they_hold(monkeypatch):
+    """An envelope carrying last month's money over is not trending over just
+    because this month's assignment is small."""
+    _stub_forecast(
+        monkeypatch,
+        forecast=_forecast_payload(
+            envelopes=[
+                {
+                    "envelope_id": "env-1",
+                    "category_group_id": "cg-1",
+                    "carried_over": "400.00",
+                    "assigned": "50.00",
+                    "funded": "450.00",
+                    "spent": "90.00",
+                    "projected": "186.00",
+                }
+            ]
+        ),
+        envelopes=_TWO_ENVELOPES,
+        category_groups=[{"id": "cg-1", "name": "Everyday"}],
+    )
+
+    view = await VIEW_BUILDERS["/forecast"](stub_page())
+    texts = [c.value for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "Nothing is trending over its plan." in texts
+    assert "Groceries" not in texts
+
+
+async def test_forecast_rows_open_the_envelope_they_name(monkeypatch):
+    """Every "trending over" row navigated to `/envelopes/detail` without setting
+    the session id, so all of them opened whichever envelope was looked at last."""
+    _stub_forecast(
+        monkeypatch,
+        forecast=_forecast_payload(),
+        envelopes=_TWO_ENVELOPES,
+        category_groups=[{"id": "cg-1", "name": "Everyday"}],
+    )
+
+    routed: list[str] = []
+    page = stub_page()
+    page.navigate = routed.append
+    view = await VIEW_BUILDERS["/forecast"](page)
+
+    row = next(
+        c
+        for c in walk(view)
+        if isinstance(c, ft.Container)
+        and getattr(c, "on_click", None) is not None
+        and any(isinstance(t, ft.Text) and t.value == "Hobbies" for t in walk(c))
+    )
+    row.on_click(SimpleNamespace(control=row))
+
+    assert page.session.store.get("selected_envelope_id") == "env-2"
+    assert routed == ["/envelopes/detail"]
+
+
+async def test_forecast_survives_an_empty_budget(monkeypatch):
+    _stub_forecast(monkeypatch, forecast={})
+
+    view = await VIEW_BUILDERS["/forecast"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "No category groups yet — there is nothing to project." in texts
+    assert not any("Couldn't reach the server" in t for t in texts)
+
+
+async def test_forecast_says_so_when_the_server_is_unreachable(monkeypatch):
+    """A projection built from part of the data is not a projection, and 0,00 zł
+    "projected spending" over an empty chart looks like good news."""
+    import httpx
+
+    async def _boom(*args, **kwargs):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr("api_client._client", lambda: SimpleNamespace(get=_boom))
+    # Straight through `api_client`, so the real except/`_note_failure` path runs.
+    monkeypatch.setattr("views.forecast.get_forecast", api_client.get_forecast)
+
+    view = await VIEW_BUILDERS["/forecast"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any("Couldn't reach the server" in t for t in texts)
+
+
+# --- Alerts: computed from the envelopes, not read from a log ----------------
+
+
+def _stub_alerts(monkeypatch, *, envelopes, allocations=(), spent=None, spent_this_month=None, category_groups=()):
+    """Alerts has no reads of its own: it works entirely off the shell snapshot it
+    already shares with the nav rail."""
+
+    async def _envelopes():
+        return list(envelopes)
+
+    async def _allocations(envelope_id=None):
+        return list(allocations)
+
+    async def _groups():
+        return list(category_groups)
+
+    async def _spent(**kwargs):
+        if kwargs.get("date_from") is None:
+            return dict(spent or {})
+        return dict(spent or {} if spent_this_month is None else spent_this_month)
+
+    monkeypatch.setattr("views.common.get_envelopes", _envelopes)
+    monkeypatch.setattr("views.common.get_envelope_allocations", _allocations)
+    monkeypatch.setattr("views.common.get_category_groups", _groups)
+    monkeypatch.setattr("views.common.get_spent_by_envelope", _spent)
+
+
+async def test_alerts_are_worked_out_from_real_envelopes(monkeypatch):
+    """Was six fixed rows with invented timestamps. Groceries is over, Hobbies is
+    at 90% - both facts the data actually supports."""
+    from currency import format_money
+
+    month = _this_month(1)
+    _stub_alerts(
+        monkeypatch,
+        envelopes=_TWO_ENVELOPES,
+        allocations=[
+            {"id": "a1", "envelope_id": "env-1", "month": month, "assigned_amount": "100.00"},
+            {"id": "a2", "envelope_id": "env-2", "month": month, "assigned_amount": "200.00"},
+        ],
+        spent={"env-1": 130.0, "env-2": 180.0},
+        category_groups=[{"id": "cg-1", "name": "Everyday"}],
+    )
+
+    view = await VIEW_BUILDERS["/alerts"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert f"Groceries is {format_money(30)} over its plan" in texts
+    assert any(t.startswith("Hobbies is at 90%") for t in texts)
+    # The group name comes from the snapshot, which used to leave it empty.
+    assert any(t.startswith("Everyday · ") for t in texts)
+
+
+async def test_alerts_put_the_overspent_envelopes_first(monkeypatch):
+    month = _this_month(1)
+    _stub_alerts(
+        monkeypatch,
+        envelopes=_TWO_ENVELOPES,
+        allocations=[
+            {"id": "a1", "envelope_id": "env-1", "month": month, "assigned_amount": "100.00"},
+            {"id": "a2", "envelope_id": "env-2", "month": month, "assigned_amount": "200.00"},
+        ],
+        # Hobbies is nearly gone; Groceries is genuinely over.
+        spent={"env-1": 130.0, "env-2": 198.0},
+        category_groups=[{"id": "cg-1", "name": "Everyday"}],
+    )
+
+    view = await VIEW_BUILDERS["/alerts"](stub_page())
+    titles = [
+        c.value
+        for c in walk(view)
+        if isinstance(c, ft.Text) and (c.value or "").startswith(("Groceries is", "Hobbies is"))
+    ]
+
+    assert titles[0].startswith("Groceries is")
+
+
+async def test_alerts_do_not_flag_an_envelope_living_off_last_months_money(monkeypatch):
+    """Assigned 10 this month but carrying 400 over: 90 spent is 22% of what it
+    holds, not 900% of what it was topped up with."""
+    month = _this_month(1)
+    last = _last_month(1)
+    _stub_alerts(
+        monkeypatch,
+        envelopes=[_TWO_ENVELOPES[0]],
+        allocations=[
+            {"id": "a0", "envelope_id": "env-1", "month": last, "assigned_amount": "400.00"},
+            {"id": "a1", "envelope_id": "env-1", "month": month, "assigned_amount": "10.00"},
+        ],
+        spent={"env-1": 90.0},
+        spent_this_month={"env-1": 90.0},
+        category_groups=[{"id": "cg-1", "name": "Everyday"}],
+    )
+
+    view = await VIEW_BUILDERS["/alerts"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "Nothing needs attention — every envelope is inside what it holds." in texts
+
+
+async def test_alerts_never_claim_a_notification_was_sent(monkeypatch):
+    """The mock's meta line read "sent by email". Nothing in this app sends
+    anything, and there is no delivery history to read from."""
+    month = _this_month(1)
+    _stub_alerts(
+        monkeypatch,
+        envelopes=_TWO_ENVELOPES,
+        allocations=[
+            {"id": "a1", "envelope_id": "env-1", "month": month, "assigned_amount": "100.00"},
+            {"id": "a2", "envelope_id": "env-2", "month": month, "assigned_amount": "200.00"},
+        ],
+        spent={"env-1": 130.0, "env-2": 180.0},
+        category_groups=[{"id": "cg-1", "name": "Everyday"}],
+    )
+
+    view = await VIEW_BUILDERS["/alerts"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert not any("sent by email" in t for t in texts)
+
+
+async def test_alerts_state_the_threshold_from_settings(monkeypatch):
+    """The subtitle used to hardcode 80 next to a separately hardcoded 0.8, and
+    neither had anything to do with the Settings slider."""
+    set_alert_threshold(60)
+    _stub_alerts(monkeypatch, envelopes=[])
+
+    view = await VIEW_BUILDERS["/alerts"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any("Heads-up at 60%" in t for t in texts)
+    assert not any("Heads-up at 80%" in t for t in texts)
+
+
+def _stub_alerts_at_65_percent(monkeypatch):
+    """One envelope with 130 of 200 spent - 65%, either side of the threshold
+    depending on what the user chose."""
+    month = _this_month(1)
+    _stub_alerts(
+        monkeypatch,
+        envelopes=[_TWO_ENVELOPES[1]],
+        allocations=[{"id": "a2", "envelope_id": "env-2", "month": month, "assigned_amount": "200.00"}],
+        spent={"env-2": 130.0},
+        category_groups=[{"id": "cg-1", "name": "Everyday"}],
+    )
+
+
+async def test_lowering_the_threshold_flags_an_envelope_that_was_fine(monkeypatch):
+    """The point of the setting: at 80% this envelope is on track, at 60% it is
+    worth a heads-up. The slider used to move and change nothing anywhere."""
+    set_alert_threshold(60)
+    _stub_alerts_at_65_percent(monkeypatch)
+
+    view = await VIEW_BUILDERS["/alerts"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any(t.startswith("Hobbies is at 65%") for t in texts)
+
+
+async def test_the_same_envelope_is_quiet_at_the_default_threshold(monkeypatch):
+    """The other half of the test above - without it, "flagged at 60%" could just
+    mean "flagged always"."""
+    set_alert_threshold(DEFAULT_ALERT_THRESHOLD)
+    _stub_alerts_at_65_percent(monkeypatch)
+
+    view = await VIEW_BUILDERS["/alerts"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "Nothing needs attention — every envelope is inside what it holds." in texts
+
+
+async def test_the_threshold_also_moves_the_sidebar_attention_badge(monkeypatch):
+    """Every warning in the app comes through `envelope_state()`, so the setting
+    has to reach the nav rail too - a screen saying "needs attention" beside a
+    badge counting on a different threshold would contradict itself."""
+    from theme import palette
+    from views.common import category_group_nav, fetch_budget_snapshot
+
+    _stub_alerts_at_65_percent(monkeypatch)
+    page = stub_page()
+
+    set_alert_threshold(DEFAULT_ALERT_THRESHOLD)
+    _, quiet = category_group_nav(palette(page), page, await fetch_budget_snapshot())
+
+    set_alert_threshold(60)
+    _, flagged = category_group_nav(palette(page), page, await fetch_budget_snapshot())
+
+    assert (quiet, flagged) == (0, 1)
+
+
+def _threshold_slider(view) -> ft.Slider:
+    return next(c for c in walk(view) if isinstance(c, ft.Slider))
+
+
+async def test_threshold_slider_persists_and_rebuilds(monkeypatch):
+    """It used to keep its value in a local dict that nothing else ever read."""
+    from preferences import ALERT_THRESHOLD_STORAGE_KEY, alert_threshold
+
+    stored: dict = {}
+    rebuilt: list = []
+
+    page = stub_page()
+    page.shared_preferences = SimpleNamespace(
+        set=lambda key, value: _async_return(stored.__setitem__(key, value) or True),
+        get=lambda key: _async_return(stored.get(key)),
+    )
+
+    async def on_route_change(e):
+        rebuilt.append(e)
+
+    page.on_route_change = on_route_change
+
+    view = await VIEW_BUILDERS["/settings"](page)
+    slider = _threshold_slider(view)
+    assert slider.value == DEFAULT_ALERT_THRESHOLD
+
+    await slider.on_change_end(SimpleNamespace(control=SimpleNamespace(value=65.0)))
+
+    assert alert_threshold() == 65
+    assert stored == {ALERT_THRESHOLD_STORAGE_KEY: 65}
+    # Envelope states are resolved at build time, so the route has to be rebuilt
+    # for a new threshold to reach anything already on screen.
+    assert len(rebuilt) == 1
+
+
+async def test_dragging_the_threshold_slider_does_not_commit_every_step():
+    """`on_change` fires ten times across a drag; committing each one would write
+    to shared preferences and rebuild the whole route ten times."""
+    from preferences import alert_threshold
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/settings"](page)
+    slider = _threshold_slider(view)
+
+    slider.on_change(SimpleNamespace(control=SimpleNamespace(value=55.0)))
+
+    assert alert_threshold() == DEFAULT_ALERT_THRESHOLD
+    assert any(isinstance(c, ft.Text) and c.value == "55%" for c in walk(view))
+
+
+async def test_dark_mode_survives_a_reload(monkeypatch):
+    """It was the one Settings control that looked like it worked and did not:
+    `apply_theme()` set light unconditionally at startup, so choosing dark got
+    you a white screen every time you came back."""
+    from preferences import DARK_MODE_STORAGE_KEY, dark_mode, set_dark_mode
+    from theme import apply_theme
+
+    stored: dict = {}
+    page = stub_page()
+    page.shared_preferences = SimpleNamespace(
+        set=lambda key, value: _async_return(stored.__setitem__(key, value) or True),
+        get=lambda key: _async_return(stored.get(key)),
+    )
+    page.on_route_change = None
+
+    view = await VIEW_BUILDERS["/settings"](page)
+    toggle = next(c for c in walk(view) if isinstance(c, ft.Switch))
+    await toggle.on_change(SimpleNamespace(control=SimpleNamespace(value=True)))
+
+    assert stored == {DARK_MODE_STORAGE_KEY: True}
+
+    # A fresh start reads it back and paints dark before the first route change.
+    set_dark_mode(False)
+    from main import _restore_preferences
+
+    fresh = SimpleNamespace(shared_preferences=SimpleNamespace(get=lambda key: _async_return(stored.get(key))))
+    await _restore_preferences(fresh)
+    assert dark_mode() is True
+
+    painted = stub_page()
+    apply_theme(painted)
+    assert painted.theme_mode == ft.ThemeMode.DARK
+
+
+async def test_the_notification_picker_does_not_offer_a_channel_that_does_not_exist():
+    """Envelo has no mailer, no webhook worker and no queue, so "Email" and
+    "Webhook" both named something that cannot happen - in a control that also
+    persisted nothing."""
+    view = await VIEW_BUILDERS["/settings"](stub_page())
+
+    picker = next(
+        c
+        for c in walk(view)
+        if isinstance(c, ft.Dropdown) and any(o.key in {"none", "email", "webhook"} for o in (c.options or []))
+    )
+    assert picker.disabled is True
+    assert [o.key for o in picker.options] == ["none"]
+
+
+async def test_settings_does_not_greet_a_user_that_does_not_exist():
+    """The eyebrow read "Dawid Krysa · dawid@envelo.local" - a name and an
+    address that exist nowhere. There is no user entity behind the API."""
+    view = await VIEW_BUILDERS["/settings"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert not any("@" in t for t in texts)
+
+
+async def test_sign_out_does_not_promise_a_password_prompt():
+    """There is no auth: the login screen accepts anything and this button only
+    navigates."""
+    view = await VIEW_BUILDERS["/settings"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert not any("password" in t.lower() for t in texts)
+
+
+async def test_saved_threshold_is_restored_before_anything_renders():
+    """Same reason the currency is: envelope states - and the colors that follow
+    from them - are resolved at build time, so this has to happen in `main()`
+    before the first route change."""
+    from main import _restore_preferences
+    from preferences import ALERT_THRESHOLD_STORAGE_KEY, alert_threshold
+
+    stored = {ALERT_THRESHOLD_STORAGE_KEY: 55}
+    page = SimpleNamespace(
+        shared_preferences=SimpleNamespace(get=lambda key: _async_return(stored.get(key)))
+    )
+
+    await _restore_preferences(page)
+
+    assert alert_threshold() == 55
+
+
+async def test_a_nonsense_stored_threshold_falls_back_instead_of_breaking(monkeypatch):
+    """The value can be missing, stale or hand-edited. A threshold of 0 would
+    paint every envelope amber forever, and a string would raise."""
+    from main import _restore_preferences
+    from preferences import ALERT_THRESHOLD_STORAGE_KEY, MIN_ALERT_THRESHOLD, alert_threshold
+
+    for value, expected in (("not a number", DEFAULT_ALERT_THRESHOLD), (0, MIN_ALERT_THRESHOLD), (None, DEFAULT_ALERT_THRESHOLD)):
+        page = SimpleNamespace(
+            shared_preferences=SimpleNamespace(
+                get=lambda key, v=value: _async_return(v if key == ALERT_THRESHOLD_STORAGE_KEY else None)
+            )
+        )
+        await _restore_preferences(page)
+        assert alert_threshold() == expected
+
+
+async def test_alert_rows_open_the_envelope_they_name(monkeypatch):
+    month = _this_month(1)
+    _stub_alerts(
+        monkeypatch,
+        envelopes=_TWO_ENVELOPES,
+        allocations=[{"id": "a2", "envelope_id": "env-2", "month": month, "assigned_amount": "200.00"}],
+        spent={"env-2": 250.0},
+        category_groups=[{"id": "cg-1", "name": "Everyday"}],
+    )
+
+    routed: list[str] = []
+    page = stub_page()
+    page.navigate = routed.append
+    view = await VIEW_BUILDERS["/alerts"](page)
+
+    open_button = find_button(view, "Open")
+    assert open_button is not None
+    open_button.on_click(SimpleNamespace(control=open_button))
+
+    assert page.session.store.get("selected_envelope_id") == "env-2"
+    assert routed == ["/envelopes/detail"]
+
+
+async def test_alerts_and_their_nav_rail_share_one_fetch(monkeypatch):
+    """Same snapshot as the shell: the screen is envelope-shaped, so it hands its
+    own to `app_shell` rather than letting the nav fetch the month twice."""
+    calls: list[str] = []
+
+    async def _counted():
+        calls.append("envelopes")
+        return []
+
+    _stub_alerts(monkeypatch, envelopes=[])
+    monkeypatch.setattr("views.common.get_envelopes", _counted)
+
+    await VIEW_BUILDERS["/alerts"](stub_page())
+
+    assert len(calls) == 1
+
+
+# --- Payees: history the database counted, plus Rename and Merge that work ---
+
+
+def _stub_payees(monkeypatch, *, payees, stats=None, envelopes=()):
+    state = {"payees": list(payees), "stats": dict(stats or {})}
+
+    async def _payees():
+        return list(state["payees"])
+
+    async def _stats():
+        return dict(state["stats"])
+
+    async def _envelopes():
+        return list(envelopes)
+
+    monkeypatch.setattr("views.payees.get_payees", _payees)
+    monkeypatch.setattr("views.payees.get_payee_stats", _stats)
+    monkeypatch.setattr("views.payees.get_envelopes", _envelopes)
+    return state
+
+
+_BIEDRONKA = {"id": "p1", "name": "Biedronka"}
+_DUPLICATE = {"id": "p2", "name": "BIEDRONKA 1234"}
+
+
+async def test_payees_show_the_history_the_database_counted(monkeypatch):
+    """Was seven fixed rows with invented counts and totals."""
+    _stub_payees(
+        monkeypatch,
+        payees=[_BIEDRONKA],
+        stats={
+            "p1": {
+                "total": "-1842.55",
+                "transaction_count": 46,
+                "last_transaction_date": "2026-07-23",
+                "top_envelope_id": "env-1",
+            }
+        },
+        envelopes=[{"id": "env-1", "name": "Groceries", "category_group_id": "cg-1", "target_amount": None}],
+    )
+
+    view = await VIEW_BUILDERS["/payees"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "Biedronka" in texts
+    assert any("46 transactions · last on 23 July 2026" in t for t in texts)
+    assert "Groceries" in texts
+
+
+async def test_a_payee_that_pays_you_is_not_shown_as_spending(monkeypatch):
+    """The mock rendered `format_money(-total)`, which turned an employer or a
+    refund into an expense. The total is signed and shown as it is."""
+    from currency import format_money
+
+    _stub_payees(
+        monkeypatch,
+        payees=[{"id": "p9", "name": "Kestrel BV"}],
+        stats={"p9": {"total": "3180.00", "transaction_count": 1, "last_transaction_date": "2026-07-15"}},
+    )
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/payees"](page)
+    from theme import palette
+
+    amount = next(c for c in walk(view) if isinstance(c, ft.Text) and c.value == format_money(3180))
+    assert amount.style.color == palette(page).ok_ink
+
+
+async def test_a_payee_nobody_has_filed_reads_as_uncategorized(monkeypatch):
+    _stub_payees(
+        monkeypatch,
+        payees=[_BIEDRONKA],
+        stats={"p1": {"total": "-10.00", "transaction_count": 1, "top_envelope_id": None}},
+    )
+
+    view = await VIEW_BUILDERS["/payees"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "Uncategorized" in texts
+
+
+async def test_a_payee_with_no_transactions_says_so(monkeypatch):
+    _stub_payees(monkeypatch, payees=[_BIEDRONKA], stats={"p1": {"total": "0", "transaction_count": 0}})
+
+    view = await VIEW_BUILDERS["/payees"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "no transactions yet" in texts
+
+
+async def test_payees_are_listed_busiest_first(monkeypatch):
+    """The ones worth renaming or merging are the ones that keep arriving."""
+    _stub_payees(
+        monkeypatch,
+        payees=[{"id": "p1", "name": "Rzadki"}, {"id": "p2", "name": "Czesty"}],
+        stats={"p1": {"transaction_count": 2, "total": "0"}, "p2": {"transaction_count": 40, "total": "0"}},
+    )
+
+    view = await VIEW_BUILDERS["/payees"](stub_page())
+    names = [c.value for c in walk(view) if isinstance(c, ft.Text) and c.value in {"Rzadki", "Czesty"}]
+
+    assert names == ["Czesty", "Rzadki"]
+
+
+async def test_history_hands_the_payee_to_the_transactions_search(monkeypatch):
+    """It used to navigate to an unfiltered list, which answered nothing."""
+    from views.common import PREFILL_SEARCH_KEY
+
+    _stub_payees(monkeypatch, payees=[_BIEDRONKA], stats={"p1": {"total": "0", "transaction_count": 1}})
+
+    routed: list[str] = []
+    page = stub_page()
+    page.navigate = routed.append
+    view = await VIEW_BUILDERS["/payees"](page)
+
+    find_button(view, "History").on_click(SimpleNamespace(control=None))
+
+    assert page.session.store.get(PREFILL_SEARCH_KEY) == "Biedronka"
+    assert routed == ["/transactions"]
+
+
+async def test_transactions_pick_up_a_handed_over_search_once(monkeypatch):
+    """And widen the range: a payee last seen in May, opened in August, would
+    otherwise land on "This month" and read "No transactions match"."""
+    from views.common import PREFILL_SEARCH_KEY
+
+    calls: list[dict] = []
+
+    async def _page(**kwargs):
+        calls.append(kwargs)
+        return [], 0
+
+    monkeypatch.setattr("views.transactions.get_transactions_page", _page)
+
+    page = stub_page()
+    page.session.store.set(PREFILL_SEARCH_KEY, "Biedronka")
+    view = await VIEW_BUILDERS["/transactions"](page)
+
+    assert calls[0]["search"] == "Biedronka"
+    assert any(isinstance(c, ft.TextField) and c.value == "Biedronka" for c in walk(view))
+    # Consumed, so it does not reappear on every later visit to the screen.
+    assert page.session.store.get(PREFILL_SEARCH_KEY) is None
+
+    calls.clear()
+    await VIEW_BUILDERS["/transactions"](stub_page())
+    assert calls[0]["search"] == ""
+
+
+async def test_renaming_a_payee_saves_and_refreshes(monkeypatch):
+    state = _stub_payees(monkeypatch, payees=[_BIEDRONKA], stats={"p1": {"total": "0", "transaction_count": 1}})
+    updated: list[tuple] = []
+
+    async def _update(payee_id, payload):
+        updated.append((payee_id, payload))
+        state["payees"] = [{"id": payee_id, **payload}]
+        return {"id": payee_id, **payload}
+
+    monkeypatch.setattr("api_client.update_payee", _update)
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/payees"](page)
+    find_button(view, "Rename").on_click(SimpleNamespace(control=None))
+    dialog = page.opened_dialogs[0]
+
+    assert _dialog_field(dialog, "Name").value == "Biedronka"
+    _dialog_field(dialog, "Name").value = "Biedronka Sp. z o.o."
+    await dialog.actions[1].on_click(SimpleNamespace(control=None))
+
+    assert updated == [("p1", {"name": "Biedronka Sp. z o.o."})]
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+    assert "Biedronka Sp. z o.o." in texts
+
+
+async def test_merging_offers_every_payee_except_the_one_being_merged(monkeypatch):
+    """Merging a payee into itself would delete it and repoint its transactions
+    at a row that no longer exists."""
+    _stub_payees(
+        monkeypatch,
+        payees=[_BIEDRONKA, _DUPLICATE],
+        stats={"p1": {"total": "0", "transaction_count": 5}, "p2": {"total": "0", "transaction_count": 1}},
+    )
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/payees"](page)
+    # Busiest first, so the second row's Merge belongs to the duplicate.
+    merge_buttons = [
+        c
+        for c in walk(view)
+        if isinstance(c, ft.Container)
+        and isinstance(c.content, ft.Text)
+        and c.content.value == "Merge"
+    ]
+    merge_buttons[1].on_click(SimpleNamespace(control=None))
+    dialog = page.opened_dialogs[0]
+
+    options = [o.key for o in _dialog_field(dialog, "Merge into").options]
+    assert options == ["p1"]
+
+
+async def test_merging_folds_one_payee_into_another(monkeypatch):
+    state = _stub_payees(
+        monkeypatch,
+        payees=[_BIEDRONKA, _DUPLICATE],
+        stats={"p1": {"total": "0", "transaction_count": 5}, "p2": {"total": "0", "transaction_count": 1}},
+    )
+    merged: list[tuple] = []
+
+    async def _merge(from_id, into_id):
+        merged.append((from_id, into_id))
+        state["payees"] = [_BIEDRONKA]
+        return _BIEDRONKA
+
+    monkeypatch.setattr("api_client.merge_payees", _merge)
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/payees"](page)
+    merge_buttons = [
+        c
+        for c in walk(view)
+        if isinstance(c, ft.Container)
+        and isinstance(c.content, ft.Text)
+        and c.content.value == "Merge"
+    ]
+    merge_buttons[1].on_click(SimpleNamespace(control=None))
+    dialog = page.opened_dialogs[0]
+
+    _dialog_field(dialog, "Merge into").value = "p1"
+    await dialog.actions[1].on_click(SimpleNamespace(control=None))
+
+    assert merged == [("p2", "p1")]
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+    assert "BIEDRONKA 1234" not in texts
+
+
+async def test_payees_empty_state(monkeypatch):
+    _stub_payees(monkeypatch, payees=[])
+
+    view = await VIEW_BUILDERS["/payees"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any(t.startswith("No payees yet.") for t in texts)
+
+
+async def test_payees_say_so_when_the_server_is_unreachable(monkeypatch):
+    import httpx
+
+    async def _boom(*args, **kwargs):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr("api_client._client", lambda: SimpleNamespace(get=_boom))
+    # Straight through `api_client`, so the real except/`_note_failure` path runs.
+    monkeypatch.setattr("views.payees.get_payee_stats", api_client.get_payee_stats)
+
+    view = await VIEW_BUILDERS["/payees"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any("Couldn't reach the server" in t for t in texts)
+
+
+# --- Accounts: balances the database summed, in each account's own currency --
+
+
+def _stub_accounts(monkeypatch, *, accounts, balances=None):
+    state = {"accounts": list(accounts), "balances": dict(balances or {})}
+
+    async def _accounts():
+        return list(state["accounts"])
+
+    async def _balances():
+        return dict(state["balances"])
+
+    monkeypatch.setattr("views.accounts.get_accounts", _accounts)
+    monkeypatch.setattr("views.accounts.get_account_balances", _balances)
+    return state
+
+
+_AN_ING = {"id": "acc-1", "name": "ING Checking", "type": "checking", "currency": "PLN"}
+_A_CARD = {"id": "acc-2", "name": "Revolut", "type": "credit_card", "currency": "PLN"}
+
+
+async def test_accounts_show_the_balance_the_database_summed(monkeypatch):
+    """Was a fixed 2 418,62 zł per account in `mock_data.ACCOUNTS_LIST`."""
+    _stub_accounts(
+        monkeypatch,
+        accounts=[_AN_ING],
+        balances={"acc-1": {"balance": "2418.62", "transaction_count": 142, "last_imported_at": "2026-07-24T09:00:00"}},
+    )
+
+    view = await VIEW_BUILDERS["/accounts"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any("2" in t and "418,62 PLN" in t for t in texts)
+    assert any("142 transactions" in t for t in texts)
+    assert any("last import 24 July" in t for t in texts)
+
+
+async def test_an_account_reports_its_own_currency_not_the_display_one(monkeypatch):
+    """`currency.py` is how *this reader* likes to see money; `accounts.currency`
+    is what the account holds. Formatting a EUR balance as złoty would be a
+    different number, not a different formatting."""
+    set_currency("pln")
+    _stub_accounts(
+        monkeypatch,
+        accounts=[{"id": "acc-9", "name": "Wise", "type": "checking", "currency": "EUR"}],
+        balances={"acc-9": {"balance": "100.00", "transaction_count": 1}},
+    )
+
+    view = await VIEW_BUILDERS["/accounts"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any("100,00 EUR" in t for t in texts)
+    assert not any("zł" in t for t in texts)
+
+
+async def test_a_negative_balance_is_shown_as_owed(monkeypatch):
+    _stub_accounts(
+        monkeypatch,
+        accounts=[_A_CARD],
+        balances={"acc-2": {"balance": "-318.44", "transaction_count": 12}},
+    )
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/accounts"](page)
+    from theme import palette
+
+    # The card's headline amount, not the header eyebrow that also names it.
+    amount = next(
+        c
+        for c in walk(view)
+        if isinstance(c, ft.Text) and "318,44 PLN" in (c.value or "") and c.style.size == 26
+    )
+    assert amount.style.color == palette(page).over_ink
+
+
+async def test_an_account_with_no_history_says_so(monkeypatch):
+    _stub_accounts(
+        monkeypatch,
+        accounts=[_AN_ING],
+        balances={"acc-1": {"balance": "0", "transaction_count": 0, "last_imported_at": None}},
+    )
+
+    view = await VIEW_BUILDERS["/accounts"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any("0 transactions · no imports yet" in t for t in texts)
+
+
+async def test_the_total_is_only_claimed_within_one_currency(monkeypatch):
+    """The mock added four balances and called it a total. Across currencies that
+    is a number that is not money in any of them."""
+    _stub_accounts(
+        monkeypatch,
+        accounts=[_AN_ING, {"id": "acc-9", "name": "Wise", "type": "checking", "currency": "EUR"}],
+        balances={"acc-1": {"balance": "100.00"}, "acc-9": {"balance": "50.00"}},
+    )
+
+    view = await VIEW_BUILDERS["/accounts"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "2 ACCOUNTS IN 2 CURRENCIES" in texts
+    assert not any("150" in t for t in texts)
+
+
+async def test_one_currency_still_gets_a_total(monkeypatch):
+    _stub_accounts(
+        monkeypatch,
+        accounts=[_AN_ING, _A_CARD],
+        balances={"acc-1": {"balance": "100.00"}, "acc-2": {"balance": "-30.00"}},
+    )
+
+    view = await VIEW_BUILDERS["/accounts"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "70,00 PLN ACROSS 2 ACCOUNTS" in texts
+
+
+async def test_adding_an_account_saves_it_and_refreshes(monkeypatch):
+    state = _stub_accounts(monkeypatch, accounts=[])
+    created: list[dict] = []
+
+    async def _create(payload):
+        created.append(payload)
+        state["accounts"] = [{"id": "acc-new", **payload}]
+        return {"id": "acc-new", **payload}
+
+    monkeypatch.setattr("api_client.create_account", _create)
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/accounts"](page)
+    find_button(view, "Add account").on_click(SimpleNamespace(control=None))
+    dialog = page.opened_dialogs[0]
+
+    _dialog_field(dialog, "Name").value = " Cash "
+    _dialog_field(dialog, "Type").value = "cash"
+    _dialog_field(dialog, "Currency").value = "PLN"
+    await dialog.actions[1].on_click(SimpleNamespace(control=None))
+
+    assert created == [{"name": "Cash", "type": "cash", "currency": "PLN"}]
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+    assert "Cash" in texts
+
+
+async def test_the_account_dialog_offers_the_type_the_api_accepts(monkeypatch):
+    """The stub offered "credit", which is not a value of the API's `AccountType`
+    enum - picking it would have been a 422 the moment this was wired up."""
+    from views.dialogs import ACCOUNT_TYPES
+
+    assert dict(ACCOUNT_TYPES)["credit_card"] == "Credit card"
+    assert "credit" not in dict(ACCOUNT_TYPES)
+
+
+async def test_editing_an_account_prefills_it_and_updates(monkeypatch):
+    state = _stub_accounts(monkeypatch, accounts=[_AN_ING], balances={"acc-1": {"balance": "10.00"}})
+    updated: list[tuple] = []
+
+    async def _update(account_id, payload):
+        updated.append((account_id, payload))
+        state["accounts"] = [{"id": account_id, **payload}]
+        return {"id": account_id, **payload}
+
+    monkeypatch.setattr("api_client.update_account", _update)
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/accounts"](page)
+    find_button(view, "Edit").on_click(SimpleNamespace(control=None))
+    dialog = page.opened_dialogs[0]
+
+    assert _dialog_field(dialog, "Name").value == "ING Checking"
+    assert _dialog_field(dialog, "Type").value == "checking"
+
+    _dialog_field(dialog, "Name").value = "ING Główne"
+    await dialog.actions[1].on_click(SimpleNamespace(control=None))
+
+    assert updated == [("acc-1", {"name": "ING Główne", "type": "checking", "currency": "PLN"})]
+
+
+async def test_accounts_empty_state(monkeypatch):
+    _stub_accounts(monkeypatch, accounts=[])
+
+    view = await VIEW_BUILDERS["/accounts"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any(t.startswith("No accounts yet.") for t in texts)
+
+
+async def test_accounts_say_so_when_the_server_is_unreachable(monkeypatch):
+    """An unreachable server renders every account at 0,00, which on this screen
+    reads as "your money is gone" rather than "we could not ask"."""
+    import httpx
+
+    async def _boom(*args, **kwargs):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr("api_client._client", lambda: SimpleNamespace(get=_boom))
+    # Straight through `api_client`, so the real except/`_note_failure` path runs.
+    monkeypatch.setattr("views.accounts.get_account_balances", api_client.get_account_balances)
+
+    view = await VIEW_BUILDERS["/accounts"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any("Couldn't reach the server" in t for t in texts)
+
+
+# --- Rules: a screen that described a feature the backend did not have -------
+
+
+_RULE_ENVELOPES = [
+    {"id": "env-1", "name": "Groceries", "category_group_id": "cg-1", "target_amount": None},
+    {"id": "env-2", "name": "Transport", "category_group_id": "cg-1", "target_amount": None},
+]
+
+
+def _stub_rules(monkeypatch, *, rules, envelopes=_RULE_ENVELOPES):
+    state = {"rules": list(rules)}
+
+    async def _rules():
+        return list(state["rules"])
+
+    async def _envelopes():
+        return list(envelopes)
+
+    monkeypatch.setattr("views.rules.get_categorization_rules", _rules)
+    monkeypatch.setattr("views.rules.get_envelopes", _envelopes)
+    return state
+
+
+async def test_rules_list_the_real_rules_with_their_envelope_names(monkeypatch):
+    """Was six fixed rows naming envelopes that did not exist in the database."""
+    _stub_rules(monkeypatch, rules=[{"id": "r1", "envelope_id": "env-2", "phrase": "Orlen"}])
+
+    view = await VIEW_BUILDERS["/rules"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "Orlen" in texts
+    assert "Transport" in texts
+
+
+async def test_rules_are_shown_in_the_order_that_settles_a_tie(monkeypatch):
+    """The mock numbered rows 1..n beside "applied top to bottom", implying a
+    precedence the server does not have. The longest matching phrase wins, so
+    that is the order shown - and there is no numbering to imply otherwise."""
+    _stub_rules(
+        monkeypatch,
+        rules=[
+            {"id": "r1", "envelope_id": "env-1", "phrase": "Bie"},
+            {"id": "r2", "envelope_id": "env-1", "phrase": "Biedronka Sp"},
+            {"id": "r3", "envelope_id": "env-1", "phrase": "Biedronka"},
+        ],
+    )
+
+    view = await VIEW_BUILDERS["/rules"](stub_page())
+    phrases = [c.value for c in walk(view) if isinstance(c, ft.Text) and c.value in {"Bie", "Biedronka", "Biedronka Sp"}]
+
+    assert phrases == ["Biedronka Sp", "Biedronka", "Bie"]
+
+
+async def test_rules_no_longer_claim_a_match_count(monkeypatch):
+    """Nothing records which rule filed which transaction, so "46 matches" was
+    either invented or a different question wearing the same label."""
+    _stub_rules(monkeypatch, rules=[{"id": "r1", "envelope_id": "env-1", "phrase": "Biedronka"}])
+
+    view = await VIEW_BUILDERS["/rules"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert not any("match" in t.lower() and "wins" not in t.lower() for t in texts)
+
+
+async def test_the_rules_header_no_longer_promises_an_order(monkeypatch):
+    _stub_rules(monkeypatch, rules=[])
+
+    view = await VIEW_BUILDERS["/rules"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert not any("TOP TO BOTTOM" in t for t in texts)
+    assert "LONGEST MATCH WINS" in texts
+
+
+async def test_rules_empty_state_says_what_a_rule_would_do(monkeypatch):
+    _stub_rules(monkeypatch, rules=[])
+
+    view = await VIEW_BUILDERS["/rules"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any(t.startswith("No rules yet.") for t in texts)
+
+
+async def test_a_rule_pointing_at_a_deleted_envelope_still_renders(monkeypatch):
+    """Deleting an envelope drops its rules, but a rule can still outlive its
+    envelope between one screen's fetch and the next - and a KeyError here would
+    take the whole screen down."""
+    _stub_rules(monkeypatch, rules=[{"id": "r1", "envelope_id": "gone", "phrase": "Biedronka"}])
+
+    view = await VIEW_BUILDERS["/rules"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "Deleted envelope" in texts
+
+
+async def test_the_rule_dialog_offers_only_the_condition_the_matcher_supports(monkeypatch):
+    """It used to offer "Payee contains" / "Description contains" / "Amount
+    equals" against a model with one `phrase` column - two could never be saved,
+    and the one that could was matched against the description."""
+    _stub_rules(monkeypatch, rules=[])
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/rules"](page)
+    find_button(view, "Add rule").on_click(SimpleNamespace(control=None))
+    dialog = page.opened_dialogs[0]
+
+    labels = [c.value for c in walk(dialog) if isinstance(c, ft.Text) and (c.value or "").isupper()]
+    assert "PAYEE CONTAINS" in labels
+    assert "PUT IT IN" in labels
+    assert not any("DESCRIPTION" in ln or "AMOUNT" in ln for ln in labels)
+
+
+async def test_adding_a_rule_saves_it_and_refreshes(monkeypatch):
+    state = _stub_rules(monkeypatch, rules=[])
+    created: list[dict] = []
+
+    async def _create(payload):
+        created.append(payload)
+        state["rules"] = [{"id": "r9", **payload}]
+        return {"id": "r9", **payload}
+
+    monkeypatch.setattr("api_client.create_categorization_rule", _create)
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/rules"](page)
+    find_button(view, "Add rule").on_click(SimpleNamespace(control=None))
+    dialog = page.opened_dialogs[0]
+
+    _dialog_field(dialog, "Payee contains").value = "  Biedronka  "
+    _dialog_field(dialog, "Put it in").value = "env-1"
+    await dialog.actions[1].on_click(SimpleNamespace(control=None))
+
+    assert created == [{"envelope_id": "env-1", "phrase": "Biedronka"}]
+    # Refetched, not patched in place: the list has to agree with the server.
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+    assert "Biedronka" in texts
+
+
+async def test_a_rule_needs_both_a_phrase_and_an_envelope(monkeypatch):
+    _stub_rules(monkeypatch, rules=[])
+    calls: list[dict] = []
+
+    async def _create(payload):
+        calls.append(payload)
+        return {"id": "r9", **payload}
+
+    monkeypatch.setattr("api_client.create_categorization_rule", _create)
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/rules"](page)
+    find_button(view, "Add rule").on_click(SimpleNamespace(control=None))
+    dialog = page.opened_dialogs[0]
+
+    _dialog_field(dialog, "Payee contains").value = "   "
+    _dialog_field(dialog, "Put it in").value = "env-1"
+    await dialog.actions[1].on_click(SimpleNamespace(control=None))
+
+    assert calls == []
+    assert page.opened_dialogs  # still open, with an error to read
+
+
+async def test_editing_a_rule_prefills_it_and_updates(monkeypatch):
+    state = _stub_rules(monkeypatch, rules=[{"id": "r1", "envelope_id": "env-1", "phrase": "Biedronka"}])
+    updated: list[tuple] = []
+
+    async def _update(rule_id, payload):
+        updated.append((rule_id, payload))
+        state["rules"] = [{"id": rule_id, **payload}]
+        return {"id": rule_id, **payload}
+
+    monkeypatch.setattr("api_client.update_categorization_rule", _update)
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/rules"](page)
+    find_button(view, "Edit").on_click(SimpleNamespace(control=None))
+    dialog = page.opened_dialogs[0]
+
+    assert _dialog_field(dialog, "Payee contains").value == "Biedronka"
+    assert _dialog_field(dialog, "Put it in").value == "env-1"
+
+    _dialog_field(dialog, "Put it in").value = "env-2"
+    await dialog.actions[1].on_click(SimpleNamespace(control=None))
+
+    assert updated == [("r1", {"envelope_id": "env-2", "phrase": "Biedronka"})]
+
+
+async def test_deleting_a_rule_asks_first_and_says_what_survives(monkeypatch):
+    state = _stub_rules(monkeypatch, rules=[{"id": "r1", "envelope_id": "env-1", "phrase": "Biedronka"}])
+    deleted: list[str] = []
+
+    async def _delete(rule_id):
+        deleted.append(rule_id)
+        state["rules"] = []
+        return {"id": rule_id}
+
+    monkeypatch.setattr("views.rules.delete_categorization_rule", _delete)
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/rules"](page)
+    find_button(view, "Delete").on_click(SimpleNamespace(control=None))
+    dialog = page.opened_dialogs[0]
+
+    messages = [c.value or "" for c in walk(dialog) if isinstance(c, ft.Text)]
+    assert any("keep their envelope" in m for m in messages)
+
+    assert deleted == []  # nothing happens until it is confirmed
+    await dialog.actions[1].on_click(SimpleNamespace(control=None))
+
+    assert deleted == ["r1"]
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+    assert "Biedronka" not in texts
+
+
+async def test_rules_say_so_when_the_server_is_unreachable(monkeypatch):
+    import httpx
+
+    async def _boom(*args, **kwargs):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr("api_client._client", lambda: SimpleNamespace(get=_boom))
+    # Straight through `api_client`, so the real except/`_note_failure` path runs.
+    monkeypatch.setattr("views.rules.get_categorization_rules", api_client.get_categorization_rules)
+
+    view = await VIEW_BUILDERS["/rules"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any("Couldn't reach the server" in t for t in texts)
+
+
+async def test_no_rules_is_not_an_outage(monkeypatch):
+    """The gateway answers "no rules" with 404, which must not raise a banner."""
+    import httpx
+
+    async def _not_found(*args, **kwargs):
+        request = httpx.Request("GET", "http://test/budget/categorization-rules")
+        raise httpx.HTTPStatusError("nope", request=request, response=httpx.Response(404, request=request))
+
+    monkeypatch.setattr("api_client._client", lambda: SimpleNamespace(get=_not_found))
+    monkeypatch.setattr("views.rules.get_categorization_rules", api_client.get_categorization_rules)
+
+    view = await VIEW_BUILDERS["/rules"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert not any("Couldn't reach the server" in t for t in texts)
+    assert any(t.startswith("No rules yet.") for t in texts)
+
+
+# --- First run: a checklist that reads the budget instead of declaring it ----
+
+
+def _stub_first_run(monkeypatch, *, accounts=(), statements=(), allocations=()):
+    async def _accounts():
+        return list(accounts)
+
+    async def _statements(account_id=None):
+        return list(statements)
+
+    async def _allocations(envelope_id=None):
+        return list(allocations)
+
+    monkeypatch.setattr("views.first_run.get_accounts", _accounts)
+    monkeypatch.setattr("views.first_run.get_statements", _statements)
+    monkeypatch.setattr("views.first_run.get_envelope_allocations", _allocations)
+
+
+_AN_ACCOUNT = [{"id": "acc-1", "name": "ING", "currency": "PLN"}]
+_A_STATEMENT = [{"id": "st-1", "account_id": "acc-1", "filename": "jan.csv", "imported_at": "2026-08-01T10:00:00"}]
+
+
+def _is_primary(page, button: ft.Container) -> bool:
+    from theme import palette
+
+    return button.bgcolor == palette(page).brand
+
+
+async def test_first_run_starts_at_step_one_on_an_empty_budget(monkeypatch):
+    _stub_first_run(monkeypatch)
+
+    view = await VIEW_BUILDERS["/first-run"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "STEP 1 OF 3" in texts  # the eyebrow renders uppercase
+
+
+async def test_first_run_points_at_the_step_you_are_actually_on(monkeypatch):
+    """It said "Step 1 of 3" forever, with step 1 ticked - so the one screen whose
+    entire job is telling you where you are, could not."""
+    _stub_first_run(monkeypatch, accounts=_AN_ACCOUNT)
+
+    view = await VIEW_BUILDERS["/first-run"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "STEP 2 OF 3" in texts
+
+
+async def test_first_run_highlights_the_next_step_not_the_finished_ones(monkeypatch):
+    """The mock gave the primary button to *completed* steps, so the screen
+    shouted loudest about what you had already done."""
+    _stub_first_run(monkeypatch, accounts=_AN_ACCOUNT)
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/first-run"](page)
+
+    assert _is_primary(page, find_button(view, "Import"))
+    assert not _is_primary(page, find_button(view, "Add account"))
+
+
+async def test_assigning_money_this_month_finishes_the_last_step(monkeypatch):
+    _stub_first_run(
+        monkeypatch,
+        accounts=_AN_ACCOUNT,
+        statements=_A_STATEMENT,
+        allocations=[{"id": "a1", "envelope_id": "env-1", "month": _this_month(1), "assigned_amount": "200.00"}],
+    )
+
+    page = stub_page()
+    view = await VIEW_BUILDERS["/first-run"](page)
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "ALL SET" in texts
+    # A finished checklist with no way out is a dead end - the mock could never
+    # reach this state, so it never needed one.
+    assert find_button(view, "Open your budget") is not None
+
+
+async def test_an_envelope_with_nothing_in_it_is_not_money_with_a_job(monkeypatch):
+    """A 0,00 allocation row means an envelope was created, not funded."""
+    _stub_first_run(
+        monkeypatch,
+        accounts=_AN_ACCOUNT,
+        statements=_A_STATEMENT,
+        allocations=[{"id": "a1", "envelope_id": "env-1", "month": _this_month(1), "assigned_amount": "0"}],
+    )
+
+    view = await VIEW_BUILDERS["/first-run"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "STEP 3 OF 3" in texts
+
+
+async def test_last_months_assignment_does_not_finish_this_months_step(monkeypatch):
+    """The step asks for *this month's* money to have a job."""
+    _stub_first_run(
+        monkeypatch,
+        accounts=_AN_ACCOUNT,
+        statements=_A_STATEMENT,
+        allocations=[{"id": "a1", "envelope_id": "env-1", "month": _last_month(1), "assigned_amount": "500.00"}],
+    )
+
+    view = await VIEW_BUILDERS["/first-run"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert "STEP 3 OF 3" in texts
+
+
+async def test_first_run_says_so_when_the_server_is_unreachable(monkeypatch):
+    """Every step reads as undone when nothing can be fetched, and on this screen
+    that invites setting an already-working budget up a second time."""
+    import httpx
+
+    async def _boom(*args, **kwargs):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr("api_client._client", lambda: SimpleNamespace(get=_boom))
+    # Straight through `api_client`, so the real except/`_note_failure` path runs.
+    monkeypatch.setattr("views.first_run.get_accounts", api_client.get_accounts)
+
+    view = await VIEW_BUILDERS["/first-run"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert any("Couldn't reach the server" in t for t in texts)
+
+
+async def test_an_empty_budget_is_not_an_outage(monkeypatch):
+    _stub_first_run(monkeypatch)
+
+    view = await VIEW_BUILDERS["/first-run"](stub_page())
+    texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
+
+    assert not any("Couldn't reach the server" in t for t in texts)
 
 
 # --- Transactions: refreshing a filter must not make the table jump ---------

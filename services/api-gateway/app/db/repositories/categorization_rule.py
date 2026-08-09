@@ -77,8 +77,37 @@ async def delete_categorization_rule(db: AsyncSession, categorizationRuleId: uui
 
 
 async def match_envelope_for_transaction(
-    db: AsyncSession, payee_id: uuid.UUID | None, description: str | None
+    db: AsyncSession, payee_id: uuid.UUID | None, payee_name: str | None
 ) -> uuid.UUID | None:
+    """Which envelope an imported transaction belongs in, if we can tell.
+
+    A rule is a phrase matched against the **payee's name**, case-insensitively,
+    longest match winning. It used to be matched against the transaction
+    description while every screen said "Payee contains" - the UI was describing
+    a feature the matcher did not have.
+
+    **An explicit rule beats what the payee did before.** The order used to be
+    the other way round, which was defensible while the two looked at different
+    things. Now that both key off the payee it is not: a rule written for a payee
+    you have already filed anywhere would never fire, so the feature would be
+    dead exactly for the payees you have most reason to write a rule about. A
+    rule is something you stated; history is something we inferred.
+
+    Returns `None` when neither has an opinion - an uncategorized transaction is
+    a fine outcome, and guessing would cost more to unpick than to do by hand.
+    """
+    if payee_name:
+        categorization_rules = await db.execute(
+            select(CategorizationRule).where(CategorizationRule.user_id == SEED_USER_ID)
+        )
+
+        matches: list[CategorizationRule] = []
+        for row in categorization_rules.scalars():
+            if row.phrase.lower() in payee_name.lower():
+                matches.append(row)
+
+        if matches:
+            return max(matches, key=lambda r: len(r.phrase)).envelope_id
 
     if payee_id is not None:
         result = await db.execute(
@@ -95,19 +124,5 @@ async def match_envelope_for_transaction(
         envelope_id = result.scalar()
         if envelope_id is not None:
             return envelope_id
-
-    if description is not None:
-        categorization_rules = await db.execute(
-            select(CategorizationRule).where(CategorizationRule.user_id == SEED_USER_ID)
-        )
-
-        matches: list[CategorizationRule] = []
-        for row in categorization_rules.scalars():
-            if row.phrase.lower() in description.lower():
-                matches.append(row)
-
-        if matches:
-            return max(matches, key=lambda r: len(r.phrase)).envelope_id
-        return None
 
     return None

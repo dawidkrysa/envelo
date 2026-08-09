@@ -25,7 +25,6 @@ ICONS: dict[str, str] = {
     "forecast": ft.Icons.SHOW_CHART_ROUNDED,
     "alerts": ft.Icons.ERROR_OUTLINE_ROUNDED,
     "import": ft.Icons.UPLOAD_FILE_OUTLINED,
-    "statements": ft.Icons.DESCRIPTION_OUTLINED,
     "rules": ft.Icons.OUTLINED_FLAG_ROUNDED,
     "accounts": ft.Icons.ACCOUNT_BALANCE_OUTLINED,
     "settings": ft.Icons.SETTINGS_OUTLINED,
@@ -48,25 +47,36 @@ class NavGroup:
 
 
 NAV_GROUPS: list[NavGroup] = [
-    NavGroup("Budget", [
-        NavItem("dashboard", "Dashboard", "/dashboard"),
-        NavItem("envelopes", "Envelopes", "/envelopes"),
-        NavItem("transactions", "Transactions", "/transactions"),
-    ]),
-    NavGroup("Insights", [
-        NavItem("forecast", "Forecast", "/forecast"),
-        NavItem("alerts", "Alerts", "/alerts"),
-    ]),
-    NavGroup("Import", [
-        NavItem("import", "Import statement", "/import"),
-        NavItem("statements", "Statements", "/statements"),
-        NavItem("rules", "Rules", "/rules"),
-    ]),
-    NavGroup("Setup", [
-        NavItem("accounts", "Accounts", "/accounts"),
-        NavItem("payees", "Payees", "/payees"),
-        NavItem("settings", "Settings", "/settings"),
-    ]),
+    NavGroup(
+        "Budget",
+        [
+            NavItem("dashboard", "Dashboard", "/dashboard"),
+            NavItem("envelopes", "Envelopes", "/envelopes"),
+            NavItem("transactions", "Transactions", "/transactions"),
+        ],
+    ),
+    NavGroup(
+        "Insights",
+        [
+            NavItem("forecast", "Forecast", "/forecast"),
+            NavItem("alerts", "Alerts", "/alerts"),
+        ],
+    ),
+    NavGroup(
+        "Import",
+        [
+            NavItem("import", "Import & statements", "/import"),
+            NavItem("rules", "Rules", "/rules"),
+        ],
+    ),
+    NavGroup(
+        "Setup",
+        [
+            NavItem("accounts", "Accounts", "/accounts"),
+            NavItem("payees", "Payees", "/payees"),
+            NavItem("settings", "Settings", "/settings"),
+        ],
+    ),
 ]
 
 # The mobile bottom bar only has room for the five most-used destinations.
@@ -99,7 +109,11 @@ def _sidebar_item(p: Palette, item: NavItem, active: bool, compact: bool, on_cli
         if item.count:
             row.append(_count_badge(item.count))
     return ft.Container(
-        content=ft.Row(row, spacing=0 if compact else 10, alignment=ft.MainAxisAlignment.CENTER if compact else ft.MainAxisAlignment.START),
+        content=ft.Row(
+            row,
+            spacing=0 if compact else 10,
+            alignment=ft.MainAxisAlignment.CENTER if compact else ft.MainAxisAlignment.START,
+        ),
         bgcolor=p.ok_fill if active else "transparent",
         border_radius=RADIUS_BUTTON,
         height=42 if compact else 36,
@@ -124,6 +138,7 @@ def _bottom_item(p: Palette, item: NavItem, active: bool, on_click: Callable) ->
         expand=True,
         ink=True,
         on_click=on_click,
+        border_radius=RADIUS_TILE,
     )
 
 
@@ -165,6 +180,8 @@ def build_nav(
     navigate: Callable[[str], None],
     attention_count: int = 0,
     category_groups: list[CategoryGroupNav] | None = None,
+    category_groups_collapsed: bool = False,
+    on_toggle_category_groups: Callable[[ft.ControlEvent], None] | None = None,
 ) -> ft.Control:
     """`band` is "mobile" | "tablet" | "desktop" from `theme.layout_band`."""
     is_mobile = band == "mobile"
@@ -175,19 +192,14 @@ def build_nav(
         return item if item.id != "alerts" else NavItem(item.id, item.label, item.route, attention_count)
 
     if is_mobile:
-        items = [
-            with_count(i)
-            for g in NAV_GROUPS
-            for i in g.items
-            if i.id in MOBILE_NAV_IDS
-        ]
+        items = [with_count(i) for g in NAV_GROUPS for i in g.items if i.id in MOBILE_NAV_IDS]
         return ft.Container(
             content=ft.Row(
                 [_bottom_item(p, i, i.id == active_id, lambda e, r=i.route: navigate(r)) for i in items],
                 spacing=0,
             ),
             height=66,
-            padding=ft.Padding.symmetric(horizontal=6),
+            padding=ft.Padding.symmetric(vertical=6, horizontal=12),
             bgcolor=p.sf,
             border=ft.Border(top=ft.BorderSide(1, p.line)),
         )
@@ -202,7 +214,9 @@ def build_nav(
         if not is_tablet:
             group_children.append(ft.Text(group.title.upper(), style=text_style(10.5, 600, p.ink3, letter_spacing=1.3)))
         elif gi > 0:
-            group_children.append(ft.Container(width=22, height=1, bgcolor=p.line, margin=ft.Margin.symmetric(vertical=5)))
+            group_children.append(
+                ft.Container(width=22, height=1, bgcolor=p.line, margin=ft.Margin.symmetric(vertical=5))
+            )
         for item in group.items:
             group_children.append(
                 _sidebar_item(
@@ -220,34 +234,53 @@ def build_nav(
     # `expand=True` sibling above them reproduces that without a fixed offset.
     footer_sections: list[ft.Control] = []
     if is_desktop and category_groups:
+        # Collapsible because the alternative - always full-height - is the
+        # sidebar problem this solves: a budget with a dozen groups pushed the
+        # user footer (and Settings, below it) off the bottom of a normal
+        # window, with no scrollbar hinting that anything was cut off.
+        header = ft.Container(
+            content=ft.Row(
+                [
+                    ft.Text("CATEGORY GROUPS", style=text_style(10, 500, p.ink3, letter_spacing=1)),
+                    ft.Icon(
+                        ft.Icons.KEYBOARD_ARROW_RIGHT_ROUNDED
+                        if category_groups_collapsed
+                        else ft.Icons.KEYBOARD_ARROW_DOWN_ROUNDED,
+                        size=15,
+                        color=p.ink3,
+                    ),
+                ],
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            ),
+            ink=True,
+            on_click=on_toggle_category_groups,
+            border_radius=RADIUS_TILE,
+        )
+        list_items = (
+            []
+            if category_groups_collapsed
+            else [
+                ft.Container(
+                    content=ft.Row(
+                        [
+                            ft.Container(width=3, height=15, bgcolor=g.bar_color, border_radius=2),
+                            ft.Text(g.name, style=text_style(12.5, 400, p.ink2), expand=True, no_wrap=True),
+                            ft.Text(g.left_str, style=text_style(11, 400, p.ink3)),
+                        ],
+                        spacing=9,
+                    ),
+                    height=32,
+                    padding=ft.Padding.symmetric(horizontal=12),
+                    border_radius=RADIUS_TILE,
+                    ink=True,
+                    on_click=g.on_click,
+                )
+                for g in category_groups
+            ]
+        )
         footer_sections.append(
             ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Row(
-                            [ft.Text("CATEGORY GROUPS", style=text_style(10, 500, p.ink3, letter_spacing=1))],
-                        ),
-                        *(
-                            ft.Container(
-                                content=ft.Row(
-                                    [
-                                        ft.Container(width=3, height=15, bgcolor=g.bar_color, border_radius=2),
-                                        ft.Text(g.name, style=text_style(12.5, 400, p.ink2), expand=True, no_wrap=True),
-                                        ft.Text(g.left_str, style=text_style(11, 400, p.ink3)),
-                                    ],
-                                    spacing=9,
-                                ),
-                                height=32,
-                                padding=ft.Padding.symmetric(horizontal=12),
-                                border_radius=RADIUS_TILE,
-                                ink=True,
-                                on_click=g.on_click,
-                            )
-                            for g in category_groups
-                        ),
-                    ],
-                    spacing=2,
-                ),
+                content=ft.Column([header, *list_items], spacing=2),
                 padding=ft.Padding.only(top=12),
                 border=ft.Border(top=ft.BorderSide(1, p.sf3)),
             )
@@ -268,7 +301,17 @@ def build_nav(
                         ft.Column(
                             [
                                 ft.Text("Dawid Krysa", style=text_style(12.5, 500, p.ink)),
-                                ft.Text("Settings", style=text_style(11, 400, p.ink3)),
+                                ft.Container(
+                                    content=ft.Text("Settings", style=text_style(11, 400, p.ink3)),
+                                    # Every other handler in this file takes `e` -
+                                    # Flet always calls on_click with the event,
+                                    # so a zero-arg lambda here raised the moment
+                                    # this was actually clicked instead of
+                                    # navigating anywhere.
+                                    on_click=lambda e: navigate("/settings"),
+                                    ink=True,
+                                    padding=0,
+                                ),
                             ],
                             spacing=1,
                             tight=True,

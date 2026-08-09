@@ -1,12 +1,13 @@
 """Envelope detail - `isDetail` in the design: hero stat + assigned-per-month
 history chart, and every transaction in the envelope.
 
-Which envelope to show is read from `page.session` (set by the Envelopes
-list's row/card click, `views/envelopes.py::_open_detail`) - routing.py has
-no dynamic-segment mechanism, so session storage is the simplest way to
-carry "which envelope was clicked" across a `page.navigate()` call. Falls
-back to the first envelope if nothing was ever selected this session (e.g.
-this route was reached some other way, or on a fresh page load).
+Which envelope to show is read from `page.session.store` (set by the
+Envelopes list's row/card click, `views/envelopes.py::_open_detail`, and by
+the Dashboard) - routing.py has no dynamic-segment mechanism, so session
+storage is the simplest way to carry "which envelope was clicked" across a
+`page.navigate()` call. Falls back to the first envelope if nothing was ever
+selected this session (e.g. this route was reached some other way, or on a
+fresh page load).
 """
 
 import asyncio
@@ -23,6 +24,7 @@ from api_client import (
     get_payees,
     get_spent_by_envelope,
     get_transactions,
+    get_transactions_page,
 )
 from components.bar_chart import HistoryBar, history_bar_chart
 from components.button import danger_button, secondary_button
@@ -54,10 +56,8 @@ async def build_envelope_detail_view(page: ft.Page) -> ft.View:
     accounts_by_id = {a["id"]: a["name"] for a in accounts}
     envelopes_by_id = {e["id"]: e["name"] for e in envelopes}
 
-    selected_id = page.session.get("selected_envelope_id")
-    envelope_raw = next((e for e in envelopes if e["id"] == selected_id), None) or (
-        envelopes[0] if envelopes else None
-    )
+    selected_id = page.session.store.get("selected_envelope_id")
+    envelope_raw = next((e for e in envelopes if e["id"] == selected_id), None) or (envelopes[0] if envelopes else None)
 
     if envelope_raw is None:
         return await app_shell(
@@ -71,14 +71,24 @@ async def build_envelope_detail_view(page: ft.Page) -> ft.View:
     allocations: list[dict] = []
     transactions_raw: list[dict] = []
     spent_by_envelope: dict[str, float] = {}
+    spent_to_date: dict[str, float] = {}
+    total_transactions = 0
 
     async def load() -> None:
-        nonlocal allocations, transactions_raw, spent_by_envelope
-        allocations, transactions_raw, spent_by_envelope = await asyncio.gather(
+        nonlocal allocations, transactions_raw, spent_by_envelope, spent_to_date, total_transactions
+        allocations, transactions_raw, spent_by_envelope, spent_to_date, all_time = await asyncio.gather(
             get_envelope_allocations(envelope_id=envelope_id),
             get_transactions(envelope_id=envelope_id, date_from=date_from, date_to=date_to),
             get_spent_by_envelope(date_from=date_from, date_to=date_to),
+            # Same aggregate without a start date: everything spent up to the end
+            # of this month, which is what the carry-over below is derived from.
+            get_spent_by_envelope(date_to=date_to),
+            # One row, for the count in its header - the delete confirmation
+            # needs to say how many transactions are about to lose their
+            # envelope, and that is every one of them, not just this month's.
+            get_transactions_page(envelope_id=envelope_id, limit=1),
         )
+        total_transactions = all_time[1]
 
     def compute_envelope():
         # From the server's aggregate, not from summing `transactions_raw`: that
@@ -89,7 +99,15 @@ async def build_envelope_detail_view(page: ft.Page) -> ft.View:
         assigned = float(current_alloc["assigned_amount"]) if current_alloc else 0.0
         fallback_target = float(envelope_raw["target_amount"]) if envelope_raw["target_amount"] is not None else 0.0
         target = resolve_target(allocations, envelope_id, current_month, fallback_target)
-        return to_envelope(envelope_raw, assigned, spent, target)
+
+        # What was still in the envelope when the month began: assigned in
+        # earlier months, less spent in earlier months. Matches
+        # `views/common.BudgetSnapshot` - money is not reset at the 1st.
+        assigned_before = sum(float(a["assigned_amount"]) for a in allocations if a["month"] < current_month)
+        spent_before = spent_to_date.get(envelope_id, 0.0) - spent
+        carried_over = assigned_before - spent_before
+
+        return to_envelope(envelope_raw, assigned, spent, target, carried_over)
 
     def build_body() -> list[ft.Control]:
         envelope = compute_envelope()
@@ -195,9 +213,7 @@ async def build_envelope_detail_view(page: ft.Page) -> ft.View:
                                 p,
                                 "Move money",
                                 lambda e: page.show_dialog(
-                                    move_dialog(
-                                        page, envelopes=envelopes, on_moved=refresh_detail, from_id=envelope_id
-                                    )
+                                    move_dialog(page, envelopes=envelopes, on_moved=refresh_detail, from_id=envelope_id)
                                 ),
                             ),
                             secondary_button(
@@ -219,7 +235,7 @@ async def build_envelope_detail_view(page: ft.Page) -> ft.View:
                                     confirm_delete_dialog(
                                         page,
                                         title="Delete envelope?",
-                                        message=f'Delete "{envelope_raw["name"]}"? This can\'t be undone.',
+                                        message=_delete_message(),
                                         on_confirm=_delete_envelope,
                                     )
                                 ),
@@ -253,6 +269,20 @@ async def build_envelope_detail_view(page: ft.Page) -> ft.View:
         refresh_nav = getattr(page, "refresh_nav", None)
         if refresh_nav is not None:
             await refresh_nav()
+
+    def _delete_message() -> str:
+        """Says what deleting actually does rather than only that it is
+        permanent. The transactions survive - they just stop belonging to an
+        envelope - and whatever was assigned goes back into the pool; both are
+        worth knowing *before* confirming, not discovering afterwards."""
+        name = envelope_raw["name"]
+        if not total_transactions:
+            return f'Delete "{name}"? This can\'t be undone.'
+        rows = "1 transaction" if total_transactions == 1 else f"{total_transactions} transactions"
+        return (
+            f'Delete "{name}"? Its {rows} will be kept but left uncategorised, '
+            'and any money assigned to it goes back to "to assign". This can\'t be undone.'
+        )
 
     async def _delete_envelope() -> str | None:
         result = await delete_envelope(envelope_id)

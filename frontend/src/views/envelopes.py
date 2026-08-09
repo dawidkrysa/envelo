@@ -28,10 +28,6 @@ import flet as ft
 from api_client import (
     create_envelope_allocation,
     delete_category_group,
-    get_category_groups,
-    get_envelope_allocations,
-    get_envelopes,
-    get_spent_by_envelope,
     get_to_assign,
     update_envelope,
     update_envelope_allocation,
@@ -56,7 +52,7 @@ from mock_data import (
 )
 from theme import CONTROL_HEIGHT, palette, text_style
 from utils import parse_amount, range_to_dates, resolve_target, to_envelope
-from views.common import app_shell, page_band
+from views.common import app_shell, fetch_budget_snapshot, page_band
 from views.dialogs import (
     assign_dialog,
     confirm_delete_dialog,
@@ -66,8 +62,10 @@ from views.dialogs import (
 )
 
 _SORTERS = {
-    "left": lambda e: e.assigned - e.spent,
-    "used": lambda e: -(e.spent / max(e.assigned, 1)),
+    # Against what the envelope actually holds (carry-over included), not
+    # against this month's top-up on its own.
+    "left": lambda e: e.available,
+    "used": lambda e: -(e.spent / max(e.funded, 1)),
     "name": lambda e: e.name,
 }
 
@@ -80,18 +78,20 @@ async def build_envelopes_view(page: ft.Page) -> ft.View:
     date_from, date_to = range_to_dates("this")
 
     async def _load() -> tuple:
-        # Concurrently, not one after another: these five calls do not depend on
-        # each other, and run in series they were most of this screen's ~1.5s
-        # build time.
-        return await asyncio.gather(
-            get_envelopes(),
-            get_category_groups(),
-            get_envelope_allocations(),
-            get_spent_by_envelope(date_from=date_from, date_to=date_to),
-            get_to_assign(),
-        )
+        # Concurrently, not one after another: these do not depend on each
+        # other, and run in series they were most of this screen's ~1.5s build
+        # time. The snapshot is the same one the nav rail uses - it carries this
+        # month's assignments and spending plus what each envelope carried over
+        # from earlier months - and is handed to `app_shell` so the rail does
+        # not fetch it all a second time.
+        return await asyncio.gather(fetch_budget_snapshot(), get_to_assign())
 
-    envelopes, category_groups, allocations, spent_by_envelope_map, to_assign = await _load()
+    snapshot, to_assign = await _load()
+
+    envelopes = snapshot.envelopes
+    category_groups = snapshot.category_groups
+    allocations = snapshot.allocations
+    spent_by_envelope_map = snapshot.spent_this_month
 
     groups_by_id = {cg["id"]: cg["name"] for cg in category_groups}
     envelopes_by_id = {e["id"]: e for e in envelopes}
@@ -105,8 +105,25 @@ async def build_envelopes_view(page: ft.Page) -> ft.View:
     drop_holders: dict[str, ft.Container] = {}
 
     def _assigned_amount(envelope_id: str) -> float:
+        """This month's allocation only - the value the Ledger's Assigned field
+        shows and writes back. Money left over from earlier months is
+        `_carried_over()`, deliberately kept apart: a field that displayed a
+        running total but saved a monthly amount would silently wipe out the
+        difference on the first edit."""
         alloc = allocation_by_envelope.get(envelope_id)
         return float(alloc["assigned_amount"]) if alloc else 0.0
+
+    def _carried_over(envelope_id: str) -> float:
+        return snapshot.carried_over_by_envelope.get(envelope_id, 0.0)
+
+    def _envelope_model(raw: dict) -> Envelope:
+        return to_envelope(
+            raw,
+            _assigned_amount(raw["id"]),
+            spent_by_envelope_map.get(raw["id"], 0),
+            _target_amount(raw["id"]),
+            _carried_over(raw["id"]),
+        )
 
     def _target_amount(envelope_id: str) -> float:
         """The target that applies to `date_from`'s month - an explicit
@@ -152,20 +169,16 @@ async def build_envelopes_view(page: ft.Page) -> ft.View:
     def _open_detail(envelope_id: str) -> Callable[[ft.ControlEvent], None]:
         def handler(e: ft.ControlEvent) -> None:
             # routing.py has no dynamic-segment mechanism, so the clicked
-            # envelope's id rides along in page.session rather than the URL.
-            page.session.set("selected_envelope_id", envelope_id)
+            # envelope's id rides along in the session store rather than the
+            # URL. Note `page.session.store`, not `page.session`: the latter
+            # is the Session object and has no key-value methods.
+            page.session.store.set("selected_envelope_id", envelope_id)
             page.navigate("/envelopes/detail")
 
         return handler
 
     def _group_envs(cat_id: str) -> list[Envelope]:
-        envs = [
-            to_envelope(
-                e, _assigned_amount(e["id"]), spent_by_envelope_map.get(e["id"], 0), _target_amount(e["id"])
-            )
-            for e in envelopes
-            if e["category_group_id"] == cat_id
-        ]
+        envs = [_envelope_model(e) for e in envelopes if e["category_group_id"] == cat_id]
         if state["attention_only"]:
             envs = [e for e in envs if envelope_state(e) != "ok"]
         if state["sort"] in _SORTERS:
@@ -185,9 +198,13 @@ async def build_envelopes_view(page: ft.Page) -> ft.View:
         a full re-fetch rather than a local optimistic update, so nothing
         here keeps a "pending" local copy that could drift from the
         server. Costs one round trip per write; fine at this data volume."""
-        nonlocal envelopes, category_groups, allocations, to_assign
+        nonlocal envelopes, category_groups, allocations, to_assign, snapshot
         nonlocal groups_by_id, envelopes_by_id, spent_by_envelope_map, allocation_by_envelope
-        envelopes, category_groups, allocations, spent_by_envelope_map, to_assign = await _load()
+        snapshot, to_assign = await _load()
+        envelopes = snapshot.envelopes
+        category_groups = snapshot.category_groups
+        allocations = snapshot.allocations
+        spent_by_envelope_map = snapshot.spent_this_month
         groups_by_id = {cg["id"]: cg["name"] for cg in category_groups}
         envelopes_by_id = {e["id"]: e for e in envelopes}
         allocation_by_envelope = {a["envelope_id"]: a for a in allocations if a["month"] == date_from.isoformat()}
@@ -231,13 +248,7 @@ async def build_envelopes_view(page: ft.Page) -> ft.View:
         row = row_holders.get(envelope_id)
         raw = envelopes_by_id.get(envelope_id)
         if row is not None and raw is not None:
-            envelope = to_envelope(
-                raw,
-                _assigned_amount(envelope_id),
-                spent_by_envelope_map.get(envelope_id, 0),
-                _target_amount(envelope_id),
-            )
-            refresh_envelope_ledger_row(row, p, envelope_view(p, envelope))
+            refresh_envelope_ledger_row(row, p, envelope_view(p, _envelope_model(raw)))
         page.update()
         await _refresh_nav()
 
@@ -407,9 +418,7 @@ async def build_envelopes_view(page: ft.Page) -> ft.View:
         return handler
 
     def _alerts() -> list[AlertItem]:
-        all_envs = [
-            to_envelope(e, _assigned_amount(e["id"]), spent_by_envelope_map.get(e["id"], 0)) for e in envelopes
-        ]
+        all_envs = [_envelope_model(e) for e in envelopes]
         ranked = sorted(
             [e for e in all_envs if envelope_state(e) != "ok"],
             key=lambda e: 1 if envelope_state(e) == "over" else 0,
@@ -419,7 +428,7 @@ async def build_envelopes_view(page: ft.Page) -> ft.View:
         for e in ranked[:2]:
             ev = envelope_view(p, e)
             over = ev.state == "over"
-            overspend = e.spent - e.assigned
+            overspend = e.spent - e.funded
             message = (
                 f"{e.name} is {format_money(overspend)} over its plan"
                 if over
@@ -435,12 +444,41 @@ async def build_envelopes_view(page: ft.Page) -> ft.View:
             )
         return items
 
+    # Reserved on every drop zone so switching it to a visible colour cannot
+    # shift the layout by 2px mid-drag.
+    _NO_HIGHLIGHT = ft.Border.all(2, "transparent")
+
     def _set_drop_highlight(cat_id: str, on: bool) -> None:
+        """Outline the group, never fill it.
+
+        Filling the whole section with `ok_fill` tinted every envelope inside it,
+        which read as "all of these are selected" while only the one under the
+        cursor was moving. An outline says the same thing about where the drop
+        will land without making any claim about the rows."""
         holder = drop_holders.get(cat_id)
         if holder is None:
             return
-        holder.bgcolor = p.ok_fill if on else None
+        holder.border = ft.Border.all(2, p.ok) if on else _NO_HIGHLIGHT
         page.update()
+
+    def _source_group_of(e) -> str | None:
+        """Which group the envelope being dragged currently sits in.
+
+        `DragWillAcceptEvent` resolves the source `Draggable`, and each handle
+        carries its envelope id as `data` - so the group is known while hovering,
+        not just on drop."""
+        envelope_id = getattr(getattr(e, "src", None), "data", None)
+        envelope = envelopes_by_id.get(envelope_id) if envelope_id else None
+        return envelope["category_group_id"] if envelope else None
+
+    def _on_will_accept(cat_id: str) -> Callable[[ft.DragWillAcceptEvent], None]:
+        def handler(e: ft.DragWillAcceptEvent) -> None:
+            # Hovering an envelope over its own group promises nothing - the drop
+            # is already a documented no-op - so it must not light up as if it
+            # were about to move something.
+            _set_drop_highlight(cat_id, _source_group_of(e) != cat_id)
+
+        return handler
 
     def _drop_target(cat_id: str, content: ft.Control) -> ft.Control:
         """Make a whole category-group section accept dropped envelopes.
@@ -451,12 +489,12 @@ async def build_envelopes_view(page: ft.Page) -> ft.View:
         envelope will land, so it is not decoration - without it a drag over a
         long ledger gives no feedback at all.
         """
-        holder = ft.Container(content=content)
+        holder = ft.Container(content=content, border=_NO_HIGHLIGHT, border_radius=10)
         drop_holders[cat_id] = holder
         return ft.DragTarget(
             group=DRAG_GROUP,
             content=holder,
-            on_will_accept=lambda e, gid=cat_id: _set_drop_highlight(gid, True),
+            on_will_accept=_on_will_accept(cat_id),
             on_leave=lambda e, gid=cat_id: _set_drop_highlight(gid, False),
             on_accept=_on_drop_into_group(cat_id),
         )
@@ -791,4 +829,4 @@ async def build_envelopes_view(page: ft.Page) -> ft.View:
     )
     body.append(variant_holder)
 
-    return await app_shell(page, "/envelopes", "envelopes", body)
+    return await app_shell(page, "/envelopes", "envelopes", body, snapshot=snapshot)

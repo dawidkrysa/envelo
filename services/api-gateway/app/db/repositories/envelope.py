@@ -1,11 +1,10 @@
 import uuid
 
-from app.db.models import Envelope
+from app.db.models import CategorizationRule, Envelope, EnvelopeAllocation, Transaction
 from app.db.repositories.constants import SEED_USER_ID
 from app.schemas.envelope import EnvelopeCreate, EnvelopeUpdate
 from fastapi import HTTPException
 from sqlalchemy import delete, select, update
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -24,19 +23,32 @@ async def get_envelopes(db: AsyncSession, categoryGroupId: uuid.UUID | None):
 
 
 async def delete_envelope(db: AsyncSession, envelopeId: uuid.UUID):
+    """Delete an envelope and let go of what pointed at it.
+
+    Its transactions are *uncategorised*, not deleted: they really happened, and
+    refusing the delete until the user reassigns every one of them (which is
+    what the old 409 did) made an envelope created by mistake permanent as soon
+    as a single import touched it. Its allocations and categorisation rules are
+    removed outright - both describe an envelope that is about to stop existing.
+
+    The budget still balances afterwards. Dropping the allocations returns
+    `assigned` to the pool, and uncategorising the spending removes it from the
+    correction term in `get_to_assign`, so `to_assign` gains exactly the
+    envelope's `available` - which is precisely what the envelope stops
+    contributing to `sum(available)`.
+    """
     result = await db.execute(select(Envelope).where(Envelope.id == envelopeId))
     envelope = result.scalar_one_or_none()
     if envelope is None:
         raise HTTPException(status_code=404, detail="Envelope not found")
 
-    try:
-        await db.execute(delete(Envelope).where(Envelope.id == envelopeId))
-        await db.commit()
-    except IntegrityError:
-        raise HTTPException(
-            status_code=409,
-            detail="Cannot delete envelope: it still has associated transactions. Move or delete those transactions first.",
-        )
+    await db.execute(
+        update(Transaction).where(Transaction.envelope_id == envelopeId).values(envelope_id=None)
+    )
+    await db.execute(delete(EnvelopeAllocation).where(EnvelopeAllocation.envelope_id == envelopeId))
+    await db.execute(delete(CategorizationRule).where(CategorizationRule.envelope_id == envelopeId))
+    await db.execute(delete(Envelope).where(Envelope.id == envelopeId))
+    await db.commit()
 
     return envelope
 

@@ -1,6 +1,7 @@
 from app.db.repositories.account import (
     create_account,
     delete_account,
+    get_account_balances,
     get_accounts,
     update_account,
 )
@@ -29,10 +30,13 @@ from app.db.repositories.envelope_allocation import (
     transfer_envelope_allocation,
     update_envelope_allocation,
 )
+from app.db.repositories.forecast import get_forecast
 from app.db.repositories.payee import (
     create_payee,
     delete_payee,
+    get_payee_stats,
     get_payees,
+    merge_payees,
     update_payee,
 )
 from app.db.repositories.statement import (
@@ -55,6 +59,7 @@ __all__ = [
     "create_account",
     "update_account",
     "delete_account",
+    "get_account_balances",
     "get_categorization_rules",
     "create_categorization_rule",
     "update_categorization_rule",
@@ -63,6 +68,8 @@ __all__ = [
     "create_payee",
     "update_payee",
     "delete_payee",
+    "get_payee_stats",
+    "merge_payees",
     "get_category_groups",
     "create_category_group",
     "update_category_group",
@@ -76,6 +83,7 @@ __all__ = [
     "update_envelope_allocation",
     "transfer_envelope_allocation",
     "get_to_assign",
+    "get_forecast",
     "get_statements",
     "create_statement",
     "update_statement",

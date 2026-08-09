@@ -47,8 +47,11 @@ async def import_statement(db: AsyncSession, statement: Statement) -> Statement:
                 payee = await get_or_create_payee(db, row.payee)
 
             payee_id = payee.id if payee is not None else None
+            # The payee's name, not the description: rules match on who was paid
+            # (see `match_envelope_for_transaction`). A row whose CSV carried no
+            # payee therefore matches no rule and stays uncategorized.
             envelope_id = await match_envelope_for_transaction(
-                db, payee_id, row.description
+                db, payee_id, payee.name if payee is not None else None
             )
 
             try:

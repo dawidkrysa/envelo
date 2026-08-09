@@ -1,14 +1,28 @@
-SEEDED_ENVELOPE_ID = "00000000-0000-0000-0000-000000000401"
+SEEDED_CATEGORY_GROUP_ID = "00000000-0000-0000-0000-000000000301"
+
+
+async def _create_envelope(client, name: str) -> str:
+    """Created here rather than borrowing a seeded id: envelopes can be deleted
+    now, so an id written down in a test file is no longer guaranteed to exist in
+    the shared dev database."""
+    response = await client.post(
+        "/budget/envelopes",
+        json={"category_group_id": SEEDED_CATEGORY_GROUP_ID, "name": name},
+    )
+    assert response.status_code == 201
+    return response.json()["id"]
 
 
 async def test_create_list_update_delete_categorization_rule(client):
+    envelope_id = await _create_envelope(client, "Rule target")
+
     create_response = await client.post(
         "/budget/categorization-rules",
-        json={"envelope_id": SEEDED_ENVELOPE_ID, "phrase": "STARBUCKS"},
+        json={"envelope_id": envelope_id, "phrase": "STARBUCKS"},
     )
     assert create_response.status_code == 201
     rule = create_response.json()
-    assert rule["envelope_id"] == SEEDED_ENVELOPE_ID
+    assert rule["envelope_id"] == envelope_id
     assert rule["phrase"] == "STARBUCKS"
     rule_id = rule["id"]
 

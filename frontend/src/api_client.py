@@ -4,13 +4,60 @@ Every call returns a safe empty value on failure (`[]`, `{}`, `None`) rather tha
 raising: the screens are read-mostly and a failed fetch should leave the UI empty
 rather than take the app down. Callers that need to tell "failed" from "nothing
 there" - the write paths - check for `None` explicitly.
+
+Read paths could not make that distinction at all, which is worse than it
+sounds: with the gateway down, a screen rendered "0,00 zł" and "nothing here
+yet" - not an empty state but a confident false one. `collect_failures()` fixes
+that without changing a single return type; see its docstring.
 """
 
 import asyncio
+import contextvars
+from contextlib import contextmanager
 
 import httpx
 
 from config import API_GATEWAY_URL
+
+# Which reads failed inside the innermost `collect_failures()` block, or None
+# when nobody is listening. A ContextVar rather than a module global because
+# several screens can be building at once (each `page.run_task` is its own
+# task) and one screen's outage must not surface on another's banner.
+_failures: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar("api_failures", default=None)
+
+
+@contextmanager
+def collect_failures():
+    """Records which reads failed inside the block, e.g.
+
+        with collect_failures() as failures:
+            envelopes, spent = await asyncio.gather(get_envelopes(), get_spent_by_envelope())
+        if failures:
+            ...  # say so, instead of rendering zeros as if they were the truth
+
+    Works across `asyncio.gather`: a task copies the current context when it is
+    created, so the tasks see - and append to - the very same list object this
+    block installed. The block therefore has to be entered *before* the gather.
+
+    A 404 is deliberately not a failure: the gateway answers "no rows" with 404
+    on most list endpoints, so counting it would make an empty budget look like
+    an outage - exactly the confusion this is meant to end.
+    """
+    failures: list[str] = []
+    token = _failures.set(failures)
+    try:
+        yield failures
+    finally:
+        _failures.reset(token)
+
+
+def _note_failure(endpoint: str, error: Exception) -> None:
+    if isinstance(error, httpx.HTTPStatusError) and error.response.status_code == 404:
+        return
+    bucket = _failures.get()
+    if bucket is not None:
+        bucket.append(endpoint)
+
 
 # One client per event loop, reused across calls.
 #
@@ -53,8 +100,46 @@ async def get_accounts() -> list[dict]:  # GET /budget/accounts
         response = await _client().get("/budget/accounts")
         response.raise_for_status()
         return response.json()
-    except httpx.HTTPError:
+    except httpx.HTTPError as error:
+        _note_failure("accounts", error)
         return []
+
+
+# GET /budget/accounts/balances
+async def get_account_balances() -> dict[str, dict]:
+    """`{account_id: {balance, transaction_count, last_imported_at}}`.
+
+    Keyed by id so a caller can look an account up directly. Summed by the
+    database rather than from a fetched transaction list, which caps at 100 rows
+    and would understate any account with real history.
+    """
+    try:
+        response = await _client().get("/budget/accounts/balances")
+        response.raise_for_status()
+        return {row["account_id"]: row for row in response.json()}
+    except httpx.HTTPError as error:
+        _note_failure("balances", error)
+        return {}
+
+
+# POST /budget/accounts
+async def create_account(payload: dict) -> dict | None:
+    try:
+        response = await _client().post("/budget/accounts", json=payload)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError:
+        return None
+
+
+# PUT /budget/accounts/{accountId}
+async def update_account(account_id: str, payload: dict) -> dict | None:
+    try:
+        response = await _client().put(f"/budget/accounts/{account_id}", json=payload)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError:
+        return None
 
 
 # GET /budget/payees
@@ -63,7 +148,8 @@ async def get_payees() -> list[dict]:
         response = await _client().get("/budget/payees")
         response.raise_for_status()
         return response.json()
-    except httpx.HTTPError:
+    except httpx.HTTPError as error:
+        _note_failure("payees", error)
         return []
 
 
@@ -73,7 +159,8 @@ async def get_envelopes() -> list[dict]:
         response = await _client().get("/budget/envelopes")
         response.raise_for_status()
         return response.json()
-    except httpx.HTTPError:
+    except httpx.HTTPError as error:
+        _note_failure("envelopes", error)
         return []
 
 
@@ -124,7 +211,8 @@ async def get_transactions_page(
         response.raise_for_status()
         rows = response.json()
         return rows, int(response.headers.get("X-Total-Count", len(rows)))
-    except (httpx.HTTPError, ValueError):
+    except (httpx.HTTPError, ValueError) as error:
+        _note_failure("transactions", error)
         return [], 0
 
 
@@ -149,7 +237,8 @@ async def get_transactions(
         response = await _client().get("/budget/transactions", params=params)
         response.raise_for_status()
         return response.json()
-    except httpx.HTTPError:
+    except httpx.HTTPError as error:
+        _note_failure("transactions", error)
         return []
 
 
@@ -171,7 +260,8 @@ async def get_spent_by_envelope(*, date_from=None, date_to=None) -> dict[str, fl
         response = await _client().get("/budget/transactions/spent-by-envelope", params=params)
         response.raise_for_status()
         return {row["envelope_id"]: float(row["spent"]) for row in response.json()}
-    except httpx.HTTPError:
+    except httpx.HTTPError as error:
+        _note_failure("spending", error)
         return {}
 
 
@@ -179,6 +269,49 @@ async def get_spent_by_envelope(*, date_from=None, date_to=None) -> dict[str, fl
 async def create_transaction(payload: dict) -> dict | None:
     try:
         response = await _client().post("/budget/transactions", json=payload)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError:
+        return None
+
+
+# GET /budget/payees/stats
+async def get_payee_stats() -> dict[str, dict]:
+    """`{payee_id: {total, transaction_count, last_transaction_date, top_envelope_id}}`.
+
+    `total` is signed: a payee that pays you (an employer, a refund) reports a
+    positive. Counted and summed by the database, because a payee with more
+    history than one page of `GET /budget/transactions` would otherwise be
+    reported short.
+    """
+    try:
+        response = await _client().get("/budget/payees/stats")
+        response.raise_for_status()
+        return {row["payee_id"]: row for row in response.json()}
+    except httpx.HTTPError as error:
+        _note_failure("payee history", error)
+        return {}
+
+
+# PUT /budget/payees/{payeeId}
+async def update_payee(payee_id: str, payload: dict) -> dict | None:
+    try:
+        response = await _client().put(f"/budget/payees/{payee_id}", json=payload)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError:
+        return None
+
+
+# POST /budget/payees/merge
+async def merge_payees(from_payee_id: str, into_payee_id: str) -> dict | None:
+    """Folds one payee into another, moving its transactions across. Returns the
+    surviving payee, or `None` on failure."""
+    try:
+        response = await _client().post(
+            "/budget/payees/merge",
+            json={"from_payee_id": from_payee_id, "into_payee_id": into_payee_id},
+        )
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError:
@@ -195,13 +328,78 @@ async def create_payee(name: str) -> dict | None:
         return None
 
 
+# GET /budget/categorization-rules
+async def get_categorization_rules() -> list[dict]:
+    """The payee-matching rules applied on import.
+
+    A rule is `{id, envelope_id, phrase}`: the phrase is matched against the
+    payee's name, case-insensitively, longest match winning. There is no
+    ordering to preserve and no "first rule wins" - a list position means
+    nothing to the server.
+    """
+    try:
+        response = await _client().get("/budget/categorization-rules")
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError as error:
+        _note_failure("rules", error)
+        return []
+
+
+# POST /budget/categorization-rules
+async def create_categorization_rule(payload: dict) -> dict | None:
+    try:
+        response = await _client().post("/budget/categorization-rules", json=payload)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError:
+        return None
+
+
+# PUT /budget/categorization-rules/{categorizationRuleId}
+async def update_categorization_rule(rule_id: str, payload: dict) -> dict | None:
+    try:
+        response = await _client().put(f"/budget/categorization-rules/{rule_id}", json=payload)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError:
+        return None
+
+
+# DELETE /budget/categorization-rules/{categorizationRuleId}
+async def delete_categorization_rule(rule_id: str) -> dict | None:
+    try:
+        response = await _client().delete(f"/budget/categorization-rules/{rule_id}")
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError:
+        return None
+
+
+# GET /budget/statements
+async def get_statements(account_id=None) -> list[dict]:
+    """Imported bank statements, newest first is *not* guaranteed - the server
+    does not sort these, so callers that care must sort on `imported_at`."""
+    params = {}
+    if account_id is not None:
+        params["accountId"] = account_id
+    try:
+        response = await _client().get("/budget/statements", params=params)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError as error:
+        _note_failure("statements", error)
+        return []
+
+
 # GET /budget/category-groups
 async def get_category_groups() -> list[dict]:
     try:
         response = await _client().get("/budget/category-groups")
         response.raise_for_status()
         return response.json()
-    except httpx.HTTPError:
+    except httpx.HTTPError as error:
+        _note_failure("category groups", error)
         return []
 
 
@@ -214,7 +412,8 @@ async def get_envelope_allocations(envelope_id=None) -> list[dict]:
         response = await _client().get("/budget/envelope-allocations", params=params)
         response.raise_for_status()
         return response.json()
-    except httpx.HTTPError:
+    except httpx.HTTPError as error:
+        _note_failure("assigned amounts", error)
         return []
 
 
@@ -244,8 +443,37 @@ async def get_to_assign() -> float:
         response = await _client().get("/budget/envelope-allocations/to-assign")
         response.raise_for_status()
         return float(response.json()["to_assign"])
-    except httpx.HTTPError:
+    except httpx.HTTPError as error:
+        _note_failure("money to assign", error)
         return 0
+
+
+# GET /budget/forecast
+async def get_forecast(month=None, as_of=None) -> dict:
+    """The month's projected spending, per envelope and per category group.
+
+    Returned as the server sent it, on purpose. The projection is the server's
+    to make - `method` in the response names the estimator behind it - so this
+    wrapper resolves no ids and derives no figures: a client that recomputed any
+    of them would silently disagree with the model the moment the model stopped
+    being straight-line pacing.
+
+    `{}` on failure, like every other read here; callers reach for keys with
+    `.get()` and `collect_failures()` tells them whether empty means "no
+    envelopes" or "no server".
+    """
+    params = {}
+    if month is not None:
+        params["month"] = month
+    if as_of is not None:
+        params["asOf"] = as_of
+    try:
+        response = await _client().get("/budget/forecast", params=params)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError as error:
+        _note_failure("forecast", error)
+        return {}
 
 
 # POST /budget/envelopes
@@ -290,9 +518,14 @@ async def transfer_envelope_allocation(payload: dict) -> list[dict] | None:
 
 # DELETE /budget/envelopes/{envelopeId}
 async def delete_envelope(envelope_id: str) -> dict | None:
-    """Returns the deleted envelope on success, `{"error": <detail>}` when
-    the backend refuses with 409 (still has transactions - see
-    `app/db/repositories/envelope.py`), or `None` for any other failure."""
+    """Returns the deleted envelope on success, `{"error": <detail>}` if the
+    backend refuses with 409, or `None` for any other failure.
+
+    Deleting no longer conflicts on transactions: the server uncategorises them
+    and drops the envelope's allocations and rules (see
+    `app/db/repositories/envelope.py`). The 409 branch stays because a refusal
+    is still the server's to make and swallowing its reason would be worse than
+    showing it."""
     try:
         response = await _client().delete(f"/budget/envelopes/{envelope_id}")
         response.raise_for_status()
@@ -329,5 +562,29 @@ async def delete_category_group(category_group_id: str) -> dict | None:
         if e.response.status_code == 409:
             return {"error": e.response.json().get("detail", "Couldn't delete — try again.")}
         return None
+    except httpx.HTTPError:
+        return None
+
+
+# POST /budget/statements/upload
+async def create_statement(account_id: str, filename: str, content: bytes) -> dict | None:
+    """Uploads a bank statement. Returns the created `StatementRead` on 201 -
+    including when the server accepted the upload but couldn't parse it
+    (`status == "failed"`, `error_message` set - see
+    app/services/statement_import.py) - `{"error": <detail>}` if the request
+    itself was rejected (bad account, unsupported format, oversized file - the
+    backend's `detail` already says which), or `None` on a genuine network
+    failure, where there is no server response to read a reason from."""
+    try:
+        response = await _client().post(
+            "/budget/statements/upload",
+            data={"account_id": account_id},
+            files={"file": (filename, content, "text/csv")},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPStatusError as e:
+        return {"error": e.response.json().get("detail", "Couldn't upload — try again.")}
     except httpx.HTTPError:
         return None

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from currency import format_amount_bare, format_money
 from dates import days_left_label
+from preferences import alert_fraction
 from theme import Palette
 
 POOL = 137.4  # "left to assign" starting pool
@@ -19,6 +20,20 @@ POOL = 137.4  # "left to assign" starting pool
 
 @dataclass(frozen=True)
 class Envelope:
+    """One envelope as the screens see it.
+
+    `assigned` and `spent` are **this month's** figures - what you put in and
+    what went out since the 1st. `carried_over` is everything left in the
+    envelope when the month began: assignments from earlier months that were
+    never spent.
+
+    Keeping the three apart rather than storing one rolled-up pair is the point.
+    The Ledger's "Assigned" is an editable field that writes *this month's*
+    allocation row, so it has to keep meaning this month; only the money still
+    available is cumulative. Collapsing them would leave a field that displays a
+    running total and saves a monthly one.
+    """
+
     id: str
     name: str
     assigned: float
@@ -26,6 +41,17 @@ class Envelope:
     target: float
     group_id: str = ""
     group_name: str = ""
+    carried_over: float = 0.0
+
+    @property
+    def funded(self) -> float:
+        """Everything available to spend from this envelope this month."""
+        return self.carried_over + self.assigned
+
+    @property
+    def available(self) -> float:
+        """What is still in the envelope right now."""
+        return self.funded - self.spent
 
 
 @dataclass(frozen=True)
@@ -69,8 +95,6 @@ GROUPS: list[EnvelopeGroup] = [
 
 # Bar color per group in the nav's "category groups" list and forecast chart.
 GROUP_BAR_COLOR = {"living": "ok", "quality": "warn", "future": "ok"}
-
-ACCOUNTS: list[str] = ["ING Checking", "ING Savings", "Revolut Card", "Cash"]
 
 
 @dataclass(frozen=True)
@@ -130,9 +154,21 @@ def date_short(iso_date: str) -> str:
 
 
 def envelope_state(e: Envelope) -> str:
-    if e.spent > e.assigned:
+    """Measured against everything in the envelope, not just this month's
+    assignment: an envelope carrying 200 from last month and assigned 100 this
+    month has 300 to spend, and is not "over" at 250.
+
+    The warning threshold is the user's, read live from `preferences` rather than
+    fixed at 80%. Settings has always offered the slider; it just had no effect on
+    anything. Because every warning in the app comes through here, moving it once
+    makes Alerts, the Dashboard's heads-ups, the sidebar's attention badge and the
+    amber envelope rows all agree with what the slider says - which is the only
+    way a "warn me at 60%" setting can mean anything.
+    """
+    funded = e.funded
+    if e.spent > funded:
         return "over"
-    if e.assigned > 0 and e.spent < e.assigned and e.spent / e.assigned >= 0.8:
+    if funded > 0 and e.spent < funded and e.spent / funded >= alert_fraction():
         return "warn"
     return "ok"
 
@@ -169,21 +205,28 @@ class EnvelopeView:
     pill_ink: str
     pill_label: str
     flow_fill: str
+    # Rollover: what the envelope already held when the month started, and the
+    # total it can be spent from. `assigned`/`spent` above stay this month's.
+    carried_over: float = 0.0
+    funded: float = 0.0
+    carried_note: str = ""
 
 
 def envelope_view(p: Palette, e: Envelope) -> EnvelopeView:
-    left = e.assigned - e.spent
+    # Everything here is measured against `funded` - what carried over plus what
+    # was assigned - so a bar reads "how much of what I actually have is gone",
+    # not "how much of this month's top-up is gone".
+    funded = e.funded
+    left = e.available
     state = envelope_state(e)
-    fraction = min(e.spent / e.assigned, 1.6) if e.assigned > 0 else 0.0
-    pct = round((e.spent / e.assigned) * 100) if e.assigned > 0 else 0
+    fraction = min(e.spent / funded, 1.6) if funded > 0 else 0.0
+    pct = round((e.spent / funded) * 100) if funded > 0 else 0
 
     color = {"over": p.over, "warn": p.warn}.get(state, p.ok)
     labels = {
-        "ok": "Nothing spent yet"
-        if e.spent == 0
-        else ("Fully spent as planned" if e.spent == e.assigned else "On track"),
+        "ok": "Nothing spent yet" if e.spent == 0 else ("Fully spent as planned" if e.spent == funded else "On track"),
         "warn": days_left_label(),
-        "over": f"{format_money(e.spent - e.assigned)} over",
+        "over": f"{format_money(e.spent - funded)} over",
     }
     pill_fill, pill_ink, pill_label = {
         "over": (p.over_fill, p.over_ink, "Over"),
@@ -204,8 +247,8 @@ def envelope_view(p: Palette, e: Envelope) -> EnvelopeView:
         assigned_str=format_money(e.assigned),
         spent_str=format_money(e.spent),
         left_str=format_money(left),
-        bar_label=f"{format_money(e.spent)} of {format_money(e.assigned)}",
-        left_of_label=f"left of {format_money(e.assigned)}",
+        bar_label=f"{format_money(e.spent)} of {format_money(funded)}",
+        left_of_label=f"left of {format_money(funded)}",
         spent_label=f"{format_money(e.spent)} spent",
         pct_str=f"{pct}%",
         target_note=f"target {format_money(e.target, decimals=0)}" if e.target else "no target",
@@ -219,147 +262,12 @@ def envelope_view(p: Palette, e: Envelope) -> EnvelopeView:
         pill_ink=pill_ink,
         pill_label=pill_label,
         flow_fill=p.over_fill if state == "over" else (p.warn_fill if state == "warn" else "transparent"),
+        carried_over=e.carried_over,
+        funded=funded,
+        carried_note=f"{format_money(e.carried_over)} carried over" if e.carried_over else "",
     )
 
 
 def attention_envelopes() -> list[Envelope]:
     return [e for e in all_envelopes() if envelope_state(e) != "ok"]
 
-
-# --- Statements / rules / payees / accounts / settings mock rows -----------
-
-STATEMENTS = [
-    {
-        "filename": "ING_checking_2026-07.csv",
-        "format": "CSV",
-        "account": "ING Checking",
-        "date": "24 July 2026",
-        "count": 18,
-    },
-    {
-        "filename": "revolut_2026-07.ofx",
-        "format": "OFX",
-        "account": "Revolut Card",
-        "date": "22 July 2026",
-        "count": 31,
-    },
-    {
-        "filename": "ING_checking_2026-06.csv",
-        "format": "CSV",
-        "account": "ING Checking",
-        "date": "2 July 2026",
-        "count": 46,
-    },
-    {"filename": "ing_savings_q2.940", "format": "MT940", "account": "ING Savings", "date": "1 July 2026", "count": 7},
-    {
-        "filename": "revolut_2026-06.ofx",
-        "format": "OFX",
-        "account": "Revolut Card",
-        "date": "30 June 2026",
-        "count": 28,
-    },
-]
-
-RULES = [
-    {"pattern": "Albert Heijn", "envelope": "Groceries", "hits": "46 matches"},
-    {"pattern": "Jumbo", "envelope": "Groceries", "hits": "22 matches"},
-    {"pattern": "NS Reizigers", "envelope": "Transport", "hits": "31 matches"},
-    {"pattern": "Shell", "envelope": "Transport", "hits": "9 matches"},
-    {"pattern": "Spotify", "envelope": "Subscriptions", "hits": "12 matches"},
-    {"pattern": "Ymere", "envelope": "Rent", "hits": "12 matches"},
-]
-
-PAYEES = [
-    {"name": "Albert Heijn", "envelope": "Groceries", "count": 46, "total": 1842.55, "last": "23 July 2026"},
-    {"name": "Jumbo", "envelope": "Groceries", "count": 22, "total": 918.4, "last": "19 July 2026"},
-    {"name": "NS Reizigers", "envelope": "Transport", "count": 31, "total": 264.9, "last": "23 July 2026"},
-    {"name": "Café de Sluis", "envelope": "Eating out", "count": 8, "total": 212.5, "last": "22 July 2026"},
-    {"name": "Spotify", "envelope": "Subscriptions", "count": 12, "total": 143.88, "last": "21 July 2026"},
-    {"name": "Coolblue", "envelope": "Hobbies", "count": 5, "total": 428.0, "last": "20 July 2026"},
-    {"name": "Woningcorporatie Ymere", "envelope": "Rent", "count": 12, "total": 13800.0, "last": "11 July 2026"},
-]
-
-ACCOUNTS_LIST = [
-    {"name": "ING Checking", "type": "Checking", "balance": 2418.62, "meta": "PLN · last import 24 July"},
-    {"name": "ING Savings", "type": "Savings", "balance": 9250.0, "meta": "PLN · last import 1 July"},
-    {"name": "Revolut Card", "type": "Credit card", "balance": -318.44, "meta": "PLN · last import 22 July"},
-    {"name": "Cash", "type": "Cash", "balance": 85.0, "meta": "PLN · updated by hand"},
-]
-
-IMPORT_ROWS = [
-    {"date": "23.07", "payee": "Albert Heijn 1284", "envelope": "Groceries", "amount": -42.18, "state": "ok"},
-    {"date": "23.07", "payee": "NS Reizigers", "envelope": "Transport", "amount": -8.6, "state": "ok"},
-    {"date": "22.07", "payee": "Café de Sluis", "envelope": "Eating out", "amount": -34.5, "state": "warn"},
-    {"date": "21.07", "payee": "Spotify AB", "envelope": "Subscriptions", "amount": -11.99, "state": "ok"},
-    {"date": "20.07", "payee": "Coolblue", "envelope": "Hobbies", "amount": -64, "state": "warn"},
-    {
-        "date": "19.07",
-        "payee": "SEPA overboeking 8841",
-        "envelope": "Pick an envelope",
-        "amount": -120,
-        "state": "none",
-    },
-]
-
-ALERT_HISTORY = [
-    {
-        "title": "Gifts went 22,50 zł over its plan",
-        "meta": "Yesterday, 17:42 · Gifts · sent by email",
-        "cta": "Open",
-        "over": True,
-    },
-    {
-        "title": "Groceries reached 85% with 9 days left",
-        "meta": "Yesterday, 09:15 · Groceries · sent by email",
-        "cta": "Open",
-        "over": False,
-    },
-    {
-        "title": "Eating out reached 95% with 11 days left",
-        "meta": "20 July, 20:03 · Eating out · sent by email",
-        "cta": "Open",
-        "over": False,
-    },
-    {
-        "title": "Forecast: you are on pace to overspend by 118,20 zł",
-        "meta": "18 July, 08:00 · Whole budget",
-        "cta": "Forecast",
-        "over": True,
-    },
-    {
-        "title": "Subscriptions reached 100% with 14 days left",
-        "meta": "17 July, 12:31 · Subscriptions",
-        "cta": "Open",
-        "over": False,
-    },
-    {
-        "title": "Transport reached 80% with 19 days left",
-        "meta": "12 July, 07:55 · Transport",
-        "cta": "Open",
-        "over": False,
-    },
-]
-
-SETUP_STEPS = [
-    {
-        "n": 1,
-        "title": "Add your first account",
-        "body": "Checking, savings, credit card or cash — it just needs a name and a currency.",
-        "cta": "Add account",
-        "done": True,
-    },
-    {
-        "n": 2,
-        "title": "Import a bank statement",
-        "body": "CSV, MT940 or OFX. You will see every row before anything is saved.",
-        "cta": "Import",
-        "done": False,
-    },
-    {
-        "n": 3,
-        "title": "Give your money jobs",
-        "body": "Create envelopes and assign this month's money to them.",
-        "cta": "Envelopes",
-        "done": False,
-    },
-]

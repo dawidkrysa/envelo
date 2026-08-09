@@ -25,7 +25,7 @@ from currency import format_money
 from mock_data import Transaction
 from theme import palette, text_style
 from utils import range_to_dates, to_transaction
-from views.common import app_shell, page_band
+from views.common import PREFILL_SEARCH_KEY, app_shell, page_band
 from views.dialogs import new_transaction_dialog
 
 
@@ -105,7 +105,23 @@ def _loading_rows(p, band: str, count: int) -> ft.Container:
 async def build_transactions_view(page: ft.Page) -> ft.View:
     p = palette(page)
     band = page_band(page)
-    state = {"account_id": "all", "envelope_id": "all", "range": "this", "search": "", "page": 0}
+    # A search term handed over by another screen (Payees' "History"), consumed
+    # so it applies once and does not reappear on every later visit.
+    #
+    # It widens the range to the year as well: a payee last seen in May, opened
+    # in August, would otherwise land on "This month" and read "No transactions
+    # match" - the screen answering a question nobody asked.
+    prefill = page.session.store.get(PREFILL_SEARCH_KEY) or ""
+    if prefill:
+        page.session.store.remove(PREFILL_SEARCH_KEY)
+
+    state = {
+        "account_id": "all",
+        "envelope_id": "all",
+        "range": "year" if prefill else "this",
+        "search": prefill,
+        "page": 0,
+    }
 
     # Concurrently: two independent lookups the filter dropdowns need before
     # anything can render.
@@ -195,16 +211,43 @@ async def build_transactions_view(page: ft.Page) -> ft.View:
     # wrap=True, was wrapping this row a run early even when both groups
     # comfortably fit side by side - Wrap's own layout pass, not a real
     # width shortage).
-    filters_row = ft.Row(
-        [
-            text_input(p, placeholder="Search payee, description or amount", expand=True, on_change=on_search_change),
-            select_field(p, account_options, value="all", on_select=on_account_select),
-            select_field(p, envelope_options, value="all", on_select=on_envelope_select),
-            select_field(p, range_options, value="this", on_select=on_range_select),
-        ],
-        spacing=9,
-        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    search_input = text_input(
+        p,
+        value=state["search"],
+        placeholder="Search payee, description or amount",
+        on_change=on_search_change,
+        expand=True if band != "mobile" else False,  # Unikamy expand w pionowej kolumnie
     )
+    account_filter = select_field(p, account_options, value="all", on_select=on_account_select, width=None, expand=True)
+    envelope_filter = select_field(
+        p, envelope_options, value="all", on_select=on_envelope_select, width=None, expand=True
+    )
+    range_filter = select_field(
+        p, range_options, value=state["range"], on_select=on_range_select, width=None, expand=True
+    )
+
+    if band == "mobile":
+        filters_row = ft.Column(
+            [
+                search_input,
+                account_filter,
+                envelope_filter,
+                range_filter,
+            ],
+            spacing=9,
+            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+        )
+    else:
+        filters_row = ft.Row(
+            [
+                search_input,
+                account_filter,
+                envelope_filter,
+                range_filter,
+            ],
+            spacing=9,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
 
     summary_holder = ft.Container()
 

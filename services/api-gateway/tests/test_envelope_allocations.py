@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 SEEDED_CATEGORY_GROUP_ID = "00000000-0000-0000-0000-000000000301"
+SEEDED_ACCOUNT_ID = "00000000-0000-0000-0000-000000000101"
 
 
 async def _create_envelope(client, name: str):
@@ -212,3 +213,59 @@ async def test_to_assign_decreases_by_the_newly_assigned_amount(client):
     after_value = Decimal(after.json()["to_assign"])
 
     assert before_value - after_value == Decimal("75.00")
+
+
+async def _to_assign(client) -> Decimal:
+    response = await client.get("/budget/envelope-allocations/to-assign")
+    assert response.status_code == 200
+    return Decimal(response.json()["to_assign"])
+
+
+async def test_spending_from_an_envelope_leaves_to_assign_alone(client):
+    """Spending money you had already assigned does not change how much is left
+    to assign: it leaves the account and the envelope at the same time.
+
+    The formula used to be `cash - sum(assigned)`, which counted such a purchase
+    twice - once as it left the account, once as part of the allocation it was
+    charged against - so every import quietly pushed the figure further down.
+    """
+    envelope_id = await _create_envelope(client, "Already funded")
+    await client.post(
+        "/budget/envelope-allocations",
+        json={"envelope_id": envelope_id, "month": "2026-09-01", "assigned_amount": "100.00"},
+    )
+
+    before = await _to_assign(client)
+
+    response = await client.post(
+        "/budget/transactions",
+        json={
+            "account_id": SEEDED_ACCOUNT_ID,
+            "envelope_id": envelope_id,
+            "amount": "-40.00",
+            "currency": "PLN",
+            "transaction_date": "2026-09-12",
+        },
+    )
+    assert response.status_code == 201
+
+    assert await _to_assign(client) == before
+
+
+async def test_uncategorised_spending_reduces_what_is_left_to_assign(client):
+    """The other half of the rule: money that left the account without being
+    charged to any envelope really is money you no longer have to assign."""
+    before = await _to_assign(client)
+
+    response = await client.post(
+        "/budget/transactions",
+        json={
+            "account_id": SEEDED_ACCOUNT_ID,
+            "amount": "-40.00",
+            "currency": "PLN",
+            "transaction_date": "2026-09-12",
+        },
+    )
+    assert response.status_code == 201
+
+    assert before - await _to_assign(client) == Decimal("40.00")

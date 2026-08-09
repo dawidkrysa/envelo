@@ -69,9 +69,35 @@ async def create_envelope_allocation(db: AsyncSession, data: EnvelopeAllocationC
 
 
 async def get_to_assign(db: AsyncSession) -> Decimal:
+    """Money that has arrived but has not been given a job yet.
+
+    The identity this has to satisfy is `cash = to_assign + sum(available)`,
+    where an envelope's available is `assigned - spent`. Solving for to_assign:
+
+        to_assign = cash - sum(assigned) + spending charged to an envelope
+
+    That last term is the correction: spending leaves the account *and* the
+    envelope it was charged to, so subtracting the full `sum(assigned)` on its
+    own counts every categorised purchase twice. Without it the figure drifted
+    further below the truth with every transaction imported, and the Dashboard's
+    "Safe to spend" drifted with it.
+
+    Uncategorised spending is deliberately not added back: it reduces cash and
+    belongs to no envelope, so it genuinely leaves less money to assign.
+    """
     total_transactions = await db.scalar(select(func.sum(Transaction.amount)))
     total_assigned = await db.scalar(select(func.sum(EnvelopeAllocation.assigned_amount)))
-    return (total_transactions or Decimal("0")) - (total_assigned or Decimal("0"))
+    envelope_spending = await db.scalar(
+        select(func.sum(-Transaction.amount)).where(
+            Transaction.amount < 0,
+            Transaction.envelope_id.is_not(None),
+        )
+    )
+    return (
+        (total_transactions or Decimal("0"))
+        - (total_assigned or Decimal("0"))
+        + (envelope_spending or Decimal("0"))
+    )
 
 
 async def get_or_build_envelope_allocation(

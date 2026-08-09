@@ -1,8 +1,9 @@
 """Settings - `isSettings` in the design: alert threshold, notification
 channel, currency, appearance and sign-out.
 
-Currency and appearance are real and persist; the threshold slider keeps its own
-visual state per the brief, and the notification select is still decorative.
+Threshold, currency and appearance are real and persist. The notification
+picker is disabled on purpose: Envelo has no delivery of any kind, so every
+channel it used to offer named something that does not exist.
 """
 
 import flet as ft
@@ -13,20 +14,43 @@ from components.page_header import page_header
 from components.select_field import select_field
 from components.toggle_switch import toggle_switch
 from currency import CURRENCIES, CURRENCY_STORAGE_KEY, current_currency, set_currency
+from preferences import (
+    ALERT_THRESHOLD_STORAGE_KEY,
+    DARK_MODE_STORAGE_KEY,
+    MAX_ALERT_THRESHOLD,
+    MIN_ALERT_THRESHOLD,
+    alert_threshold,
+    dark_mode,
+    set_alert_threshold,
+    set_dark_mode,
+)
 from theme import palette, text_style
 from views.common import app_shell
 
 
 async def build_settings_view(page: ft.Page) -> ft.View:
     p = palette(page)
-    state = {"threshold": 80}
 
-    threshold_value = ft.Text(f"{state['threshold']}%", style=text_style(16, 600, p.warn_ink))
+    threshold_value = ft.Text(f"{alert_threshold()}%", style=text_style(16, 600, p.warn_ink))
 
     def on_threshold(e: ft.ControlEvent) -> None:
-        state["threshold"] = int(e.control.value)
-        threshold_value.value = f"{state['threshold']}%"
+        """Label only, while the handle is moving. The value is not committed
+        here: a drag fires this ten times, and each commit rebuilds the route."""
+        threshold_value.value = f"{int(e.control.value)}%"
         page.update()
+
+    async def on_threshold_committed(e: ft.ControlEvent) -> None:
+        # Same full-rebuild trick as the theme and currency handlers below, for
+        # the same reason: every screen resolves its envelope states - and the
+        # colors that follow from them - at build time, so a new threshold has no
+        # effect on anything already on screen (the sidebar's attention badge
+        # included) until the route is rebuilt.
+        set_alert_threshold(e.control.value)
+        await page.shared_preferences.set(ALERT_THRESHOLD_STORAGE_KEY, alert_threshold())
+        if page.on_route_change:
+            await page.on_route_change(e)
+        else:
+            page.update()
 
     threshold_card = flat_card(
         p,
@@ -36,9 +60,18 @@ async def build_settings_view(page: ft.Page) -> ft.View:
                     [ft.Text("Warn me at", style=text_style(14, 600, p.ink)), threshold_value],
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 ),
-                ft.Slider(min=50, max=100, divisions=10, value=80, active_color=p.ok, on_change=on_threshold),
+                ft.Slider(
+                    min=MIN_ALERT_THRESHOLD,
+                    max=MAX_ALERT_THRESHOLD,
+                    divisions=10,
+                    value=alert_threshold(),
+                    active_color=p.ok,
+                    on_change=on_threshold,
+                    on_change_end=on_threshold_committed,
+                ),
                 ft.Text(
-                    "You will get a heads-up once an envelope reaches this share of its money.",
+                    "You will get a heads-up once an envelope reaches this share of its money. "
+                    "Used everywhere an envelope is flagged — Alerts, the Dashboard and the envelope lists.",
                     style=text_style(12.5, 400, p.ink3),
                 ),
             ],
@@ -49,6 +82,12 @@ async def build_settings_view(page: ft.Page) -> ft.View:
     )
 
     async def on_theme_change(e: ft.ControlEvent) -> None:
+        # Persisted, like the currency and the threshold. It used to be the one
+        # control here that appeared to work and did not survive a reload:
+        # `theme.apply_theme()` set light unconditionally at startup, so someone
+        # who chose dark was handed a white screen every time they came back.
+        set_dark_mode(bool(e.control.value))
+        await page.shared_preferences.set(DARK_MODE_STORAGE_KEY, dark_mode())
         # Every screen bakes its palette's colors into each control's
         # bgcolor/text style at build time (theme.palette(page) is only
         # read once, not re-evaluated live) - flipping page.theme_mode
@@ -102,12 +141,26 @@ async def build_settings_view(page: ft.Page) -> ft.View:
     rows = [
         settings_row(
             "Notifications",
-            "Where your heads-ups go.",
-            select_field(p, [("email", "Email"), ("webhook", "Webhook"), ("both", "Email and webhook")], value="email", width=190),
+            # Disabled and labelled, rather than a working-looking picker that
+            # persists nothing and reaches nothing. Envelo has no delivery of any
+            # kind - no mailer, no webhook worker, no queue - so every option here
+            # named a channel that does not exist. It is the same absence that
+            # keeps the Alerts screen in the present tense.
+            "Envelo doesn't send anything yet — Alerts shows them in the app.",
+            select_field(
+                p,
+                [("none", "In the app only")],
+                value="none",
+                width=190,
+                disabled=True,
+            ),
         ),
         settings_row(
             "Currency",
-            "Used for every amount in Envelo.",
+            # Not "every amount": account balances are shown in each account's
+            # own currency, which is a property of the account and not of how
+            # this reader likes to see money.
+            "How amounts are shown. Account balances keep their own currency.",
             select_field(
                 p,
                 [(code, cf.label) for code, cf in CURRENCIES.items()],
@@ -128,7 +181,12 @@ async def build_settings_view(page: ft.Page) -> ft.View:
                     ft.Column(
                         [
                             ft.Text("Sign out", style=text_style(14, 600, p.ink)),
-                            ft.Text("You will need your email and password to get back in.", style=text_style(12.5, 400, p.ink3)),
+                            # Was "You will need your email and password to get
+                            # back in." There is no auth: the login screen
+                            # accepts anything and this button only navigates.
+                            # Promising a password prompt that never comes is
+                            # the kind of claim someone plans around.
+                            ft.Text("Returns you to the sign-in screen.", style=text_style(12.5, 400, p.ink3)),
                         ],
                         spacing=3,
                         tight=True,
@@ -143,7 +201,11 @@ async def build_settings_view(page: ft.Page) -> ft.View:
     ]
 
     body: list[ft.Control] = [
-        page_header(p, "Settings", eyebrow_segments=["Dawid Krysa · dawid@envelo.local"]),
+        # Was "Dawid Krysa · dawid@envelo.local" - a name and an address that
+        # exist nowhere. There is no user entity behind the API (the gateway
+        # hardcodes a single owner), so there is nobody to greet by name; the
+        # same reason the Dashboard stopped saying "Hello".
+        page_header(p, "Settings", eyebrow_segments=["This device"]),
         ft.Column([threshold_card, *rows], spacing=11, width=660),
     ]
 

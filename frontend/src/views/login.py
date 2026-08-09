@@ -10,7 +10,7 @@ import flet as ft
 from components.button import link_button, primary_button
 from components.input_field import text_input
 from components.nav_rail import brand_mark
-from theme import RADIUS_CARD_LG, palette, text_style
+from theme import BREAKPOINT_MOBILE, RADIUS_CARD_LG, palette, text_style
 from views.common import page_band, standalone_shell
 
 
@@ -20,7 +20,12 @@ async def build_login_view(page: ft.Page) -> ft.View:
     state = {"mode": "login"}
 
     copy = {
-        "login": {"title": "Welcome back", "sub": "Sign in to pick up where you left off.", "cta": "Sign in", "alt": "Create an account instead"},
+        "login": {
+            "title": "Welcome back",
+            "sub": "Sign in to pick up where you left off.",
+            "cta": "Sign in",
+            "alt": "Create an account instead",
+        },
         "register": {
             "title": "Create your account",
             "sub": "One account, all your envelopes. Nothing is shared with anyone.",
@@ -64,7 +69,7 @@ async def build_login_view(page: ft.Page) -> ft.View:
             # otherwise break that coincidence.
             horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
         ),
-        width=392,
+        width=392 if band != "mobile" else getattr(page, "width", BREAKPOINT_MOBILE) * 0.9,
         bgcolor=p.sf,
         border=ft.Border.all(1, p.line),
         border_radius=RADIUS_CARD_LG,

@@ -62,6 +62,16 @@ def month_label(today: date | None = None) -> str:
     return d.strftime("%B %Y")
 
 
+def month_end_label(today: date | None = None) -> str:
+    """`31 August` - the day a month-end projection is aimed at.
+
+    The Forecast chart's legend used to read "Projected by the 31st" whatever the
+    month, which is a date February does not have.
+    """
+    d = _today(today)
+    return f"{days_in_month(d)} {d.strftime('%B')}"
+
+
 def days_left_label(today: date | None = None) -> str:
     """`29 days left` / `1 day left` - the countdown in headers and in an
     envelope's warning state label."""

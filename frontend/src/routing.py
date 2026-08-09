@@ -15,7 +15,6 @@ from views.payees import build_payees_view
 from views.rules import build_rules_view
 from views.settings import build_settings_view
 from views.statement_import import build_import_view
-from views.statements import build_statements_view
 from views.transactions import build_transactions_view
 
 ViewBuilder = Callable[[ft.Page], Awaitable[ft.View]]
@@ -30,7 +29,6 @@ VIEW_BUILDERS: dict[str, ViewBuilder] = {
     "/forecast": build_forecast_view,
     "/alerts": build_alerts_view,
     "/import": build_import_view,
-    "/statements": build_statements_view,
     "/rules": build_rules_view,
     "/accounts": build_accounts_view,
     "/payees": build_payees_view,
@@ -43,7 +41,6 @@ VIEW_BUILDERS: dict[str, ViewBuilder] = {
 ROUTE_PARENTS: dict[str, str] = {
     "/envelopes/detail": "/envelopes",
     "/import": "/transactions",
-    "/statements": "/transactions",
     "/rules": "/settings",
     "/payees": "/settings",
     "/accounts": "/settings",
