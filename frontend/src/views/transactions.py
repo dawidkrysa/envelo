@@ -211,22 +211,43 @@ async def build_transactions_view(page: ft.Page) -> ft.View:
     # wrap=True, was wrapping this row a run early even when both groups
     # comfortably fit side by side - Wrap's own layout pass, not a real
     # width shortage).
-    filters_row = ft.Row(
-        [
-            text_input(
-                p,
-                value=state["search"],
-                placeholder="Search payee, description or amount",
-                expand=True,
-                on_change=on_search_change,
-            ),
-            select_field(p, account_options, value="all", on_select=on_account_select),
-            select_field(p, envelope_options, value="all", on_select=on_envelope_select),
-            select_field(p, range_options, value=state["range"], on_select=on_range_select),
-        ],
-        spacing=9,
-        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    search_input = text_input(
+        p,
+        value=state["search"],
+        placeholder="Search payee, description or amount",
+        on_change=on_search_change,
+        expand=True if band != "mobile" else False,  # Unikamy expand w pionowej kolumnie
     )
+    account_filter = select_field(p, account_options, value="all", on_select=on_account_select, width=None, expand=True)
+    envelope_filter = select_field(
+        p, envelope_options, value="all", on_select=on_envelope_select, width=None, expand=True
+    )
+    range_filter = select_field(
+        p, range_options, value=state["range"], on_select=on_range_select, width=None, expand=True
+    )
+
+    if band == "mobile":
+        filters_row = ft.Column(
+            [
+                search_input,
+                account_filter,
+                envelope_filter,
+                range_filter,
+            ],
+            spacing=9,
+            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+        )
+    else:
+        filters_row = ft.Row(
+            [
+                search_input,
+                account_filter,
+                envelope_filter,
+                range_filter,
+            ],
+            spacing=9,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
 
     summary_holder = ft.Container()
 

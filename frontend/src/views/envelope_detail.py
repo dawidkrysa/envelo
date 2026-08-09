@@ -57,9 +57,7 @@ async def build_envelope_detail_view(page: ft.Page) -> ft.View:
     envelopes_by_id = {e["id"]: e["name"] for e in envelopes}
 
     selected_id = page.session.store.get("selected_envelope_id")
-    envelope_raw = next((e for e in envelopes if e["id"] == selected_id), None) or (
-        envelopes[0] if envelopes else None
-    )
+    envelope_raw = next((e for e in envelopes if e["id"] == selected_id), None) or (envelopes[0] if envelopes else None)
 
     if envelope_raw is None:
         return await app_shell(
@@ -215,9 +213,7 @@ async def build_envelope_detail_view(page: ft.Page) -> ft.View:
                                 p,
                                 "Move money",
                                 lambda e: page.show_dialog(
-                                    move_dialog(
-                                        page, envelopes=envelopes, on_moved=refresh_detail, from_id=envelope_id
-                                    )
+                                    move_dialog(page, envelopes=envelopes, on_moved=refresh_detail, from_id=envelope_id)
                                 ),
                             ),
                             secondary_button(
