@@ -26,7 +26,9 @@ def parse_csv(content: bytes, mapping: dict[str, str]) -> list[ParsedTransaction
         found_fields = {h: mapping.get(h) for h in reader.fieldnames}
         missing = required_fields - set(found_fields.values())
         if missing:
-            raise StatementParseError(f"Missing required column(s) for: {missing}")
+            raise StatementParseError(
+                f"Your file is missing the required column(s): {', '.join(sorted(missing))}."
+            )
 
         field_to_column = {v: k for k, v in found_fields.items()}
         description_column = field_to_column.get("description")
@@ -38,16 +40,18 @@ def parse_csv(content: bytes, mapping: dict[str, str]) -> list[ParsedTransaction
 
             if not raw_date:
                 raise StatementParseError(
-                    "Missing transaction date", row_number=row_number
+                    f"Row {row_number}: missing a transaction date.", row_number=row_number
                 )
             if not raw_amount:
-                raise StatementParseError("Missing amount", row_number=row_number)
+                raise StatementParseError(
+                    f"Row {row_number}: missing an amount.", row_number=row_number
+                )
 
             try:
                 transaction_date = datetime.strptime(raw_date, DATE_FORMAT).date()
             except ValueError:
                 raise StatementParseError(
-                    f"Invalid date '{raw_date}', expected format {DATE_FORMAT}",
+                    f"Row {row_number}: '{raw_date}' isn't a valid date - use the format YYYY-MM-DD.",
                     row_number=row_number,
                 )
 
@@ -55,7 +59,7 @@ def parse_csv(content: bytes, mapping: dict[str, str]) -> list[ParsedTransaction
                 amount = Decimal(raw_amount)
             except InvalidOperation:
                 raise StatementParseError(
-                    f"Invalid amount '{raw_amount}'", row_number=row_number
+                    f"Row {row_number}: '{raw_amount}' isn't a valid amount.", row_number=row_number
                 )
 
             description = (row.get(description_column) or "").strip() or None
@@ -71,6 +75,6 @@ def parse_csv(content: bytes, mapping: dict[str, str]) -> list[ParsedTransaction
             )
 
     if not result:
-        raise StatementParseError("CSV file contains no transaction rows")
+        raise StatementParseError("This file doesn't contain any transaction rows.")
 
     return result
