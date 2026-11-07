@@ -8,7 +8,7 @@ from app import schemas
 from app.core.logging import setup_logging
 from app.db import repositories as repo
 from app.db.session import engine, get_db
-from fastapi import APIRouter, Depends, FastAPI, Form, Response, status
+from fastapi import APIRouter, Depends, FastAPI, Form, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 setup_logging()
@@ -46,6 +46,82 @@ categorization_rules_router = APIRouter(
     prefix="/budget/categorization-rules", tags=["Categorization Rules"]
 )
 forecast_router = APIRouter(prefix="/budget/forecast", tags=["Forecast"])
+auth_router = APIRouter(prefix="/auth", tags=["Auth"])
+
+
+# ==============================================================================
+# Auth
+# ==============================================================================
+
+
+def _unauthorized(detail: str) -> HTTPException:
+    # RFC 6750: a 401 from a bearer-token API names the scheme, so a client
+    # can tell "log in again" apart from any other 401.
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=detail,
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+@auth_router.post(
+    "/register",
+    summary="Create an account and sign in",
+    status_code=status.HTTP_201_CREATED,
+    response_model=schemas.TokenPair,
+)
+async def register_v1(data: schemas.UserRegister, db: AsyncSession = Depends(get_db)):
+    # Returns a token pair rather than the new user: the client signs in
+    # straight away anyway, and this leaves no window where the account
+    # exists but the person who made it is not logged in.
+    user = await repo.create_user(db, data.email, data.password)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
+    return await repo.issue_token_pair(db, user.id)
+
+
+@auth_router.post(
+    "/login",
+    summary="Sign in",
+    status_code=status.HTTP_200_OK,
+    response_model=schemas.TokenPair,
+)
+async def login_v1(data: schemas.UserLogin, db: AsyncSession = Depends(get_db)):
+    user = await repo.authenticate_user(db, data.email, data.password)
+    if user is None:
+        # One message for "no such email" and "wrong password": telling them
+        # apart would let anyone probe which addresses have an account.
+        raise _unauthorized("Invalid email or password")
+    return await repo.issue_token_pair(db, user.id)
+
+
+@auth_router.post(
+    "/refresh",
+    summary="Exchange a refresh token for a new token pair",
+    status_code=status.HTTP_200_OK,
+    response_model=schemas.TokenPair,
+)
+async def refresh_v1(data: schemas.RefreshRequest, db: AsyncSession = Depends(get_db)):
+    pair = await repo.rotate_refresh_token(db, data.refresh_token)
+    if pair is None:
+        # Unknown, expired, revoked and replayed all look the same from here:
+        # a replay has already revoked the session, and saying so would only
+        # tell a thief that the theft was noticed.
+        raise _unauthorized("Invalid refresh token")
+    return pair
+
+
+@auth_router.post(
+    "/logout",
+    summary="Revoke a refresh token",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def logout_v1(data: schemas.RefreshRequest, db: AsyncSession = Depends(get_db)):
+    # No access token required: logging out has to work after the 15-minute
+    # access token has expired. Always 204 - logging out twice, or with a
+    # token that was never valid, leaves the caller logged out either way.
+    await repo.revoke_refresh_token(db, data.refresh_token)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ==============================================================================
@@ -657,6 +733,7 @@ async def delete_transaction_v1(
     return await repo.delete_transaction(db, transactionId)
 
 
+app.include_router(auth_router)
 app.include_router(accounts_router)
 app.include_router(categorization_rules_router)
 app.include_router(payees_router)
