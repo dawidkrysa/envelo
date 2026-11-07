@@ -1,3 +1,4 @@
+from app.db.models.auth import RefreshToken
 from app.db.models.base import Base
 from app.db.models.budget import (
     Account,
@@ -31,4 +32,5 @@ __all__ = [
     "CategorizationSource",
     "FileTransferStatus",
     "CategorizationRule",
+    "RefreshToken",
 ]
