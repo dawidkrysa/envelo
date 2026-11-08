@@ -7,8 +7,15 @@
 -- only run once, when the postgres volume is first created, at which point
 -- the tables this script inserts into don't exist yet.
 
+-- Sign in as dawid@example.com / envelo-dev-password. A DEVELOPMENT-ONLY
+-- credential, published here on purpose: never seed it into a database anyone
+-- else can reach. DO UPDATE rather than DO NOTHING so that re-running this
+-- script also fixes a database seeded before the password was real (when the
+-- hash was a placeholder nothing could log in with).
 INSERT INTO auth.users (id, email, password_hash) VALUES
-    ('00000000-0000-0000-0000-000000000001', 'dawid@example.com', 'placeholder-not-a-real-hash');
+    ('00000000-0000-0000-0000-000000000001', 'dawid@example.com',
+     '$argon2id$v=19$m=65536,t=3,p=4$PkmSm6r2rwlfSh8gCxskNw$MpksT4r2f3gsjFXpE0iVrxNhlO65z6CES5OBYDsC98M')
+ON CONFLICT (id) DO UPDATE SET password_hash = EXCLUDED.password_hash;
 
 INSERT INTO budget.accounts (id, user_id, name, type, currency) VALUES
     ('00000000-0000-0000-0000-000000000101', '00000000-0000-0000-0000-000000000001', 'Checking account', 'checking', 'PLN'),

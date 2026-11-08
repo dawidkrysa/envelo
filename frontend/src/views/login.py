@@ -1,12 +1,18 @@
-"""Login - `isLogin` in the design: sign-in / create-account card. Any input
-"signs in" straight to the dashboard - there is no real auth here.
+"""Login - `isLogin` in the design: sign-in / create-account card, backed by
+`POST /auth/login` and `/auth/register`.
 
 Pre-auth, so this sits outside the app shell: no nav rail, and not listed as
 a destination in it.
+
+On success the token pair goes into the session store (`auth.store_tokens`);
+from then on `api_client` signs every request with it, and `main.route_change`
+stops sending this session back here.
 """
 
 import flet as ft
 
+import auth
+from api_client import login, register
 from components.button import link_button, primary_button
 from components.input_field import text_input
 from components.nav_rail import brand_mark
@@ -39,24 +45,73 @@ async def build_login_view(page: ft.Page) -> ft.View:
     cta_text = ft.Text(copy["login"]["cta"], style=text_style(13.5, 600, p.on_brand))
     alt_link = ft.Text(copy["login"]["alt"], style=text_style(12.5, 500, p.link))
 
+    email_field = text_input(p, placeholder="you@example.com", height=42, expand=True)
+    password_field = text_input(p, placeholder="••••••••••", height=42, password=True, expand=True)
+    # Kept in the tree and only filled in when needed, rather than added on
+    # error: inserting a control shifts the card, and the button would jump
+    # out from under the pointer of someone about to click it again.
+    error_text = ft.Text("", style=text_style(12.5, 500, p.over_ink), visible=False)
+
+    def show_error(message: str | None) -> None:
+        error_text.value = message or ""
+        error_text.visible = bool(message)
+
     def toggle_mode(e: ft.ControlEvent) -> None:
         state["mode"] = "register" if state["mode"] == "login" else "login"
         c = copy[state["mode"]]
         title.value, subtitle.value, cta_text.value, alt_link.value = c["title"], c["sub"], c["cta"], c["alt"]
+        show_error(None)
         page.update()
 
-    def submit(e: ft.ControlEvent) -> None:
-        # Register lands on the first-run setup checklist (add an account,
-        # import, budget) rather than a dashboard with nothing in it yet;
-        # sign-in returns straight to a budget that already has data.
-        page.navigate("/dashboard" if state["mode"] == "login" else "/first-run")
+    async def submit(e: ft.ControlEvent) -> None:
+        # A second click while the first request is in flight would sign in
+        # twice - two sessions, two refresh tokens - so it is ignored, not
+        # queued.
+        if state.get("busy"):
+            return
+        email = (email_field.value or "").strip()
+        password = password_field.value or ""
+        if not email or not password:
+            show_error("Enter your email and password.")
+            page.update()
+            return
+
+        state["busy"] = True
+        cta_text.value = "Signing in…" if state["mode"] == "login" else "Creating account…"
+        show_error(None)
+        page.update()
+        try:
+            call = login if state["mode"] == "login" else register
+            result = await call(email, password)
+        finally:
+            state["busy"] = False
+            cta_text.value = copy[state["mode"]]["cta"]
+
+        if result is None:
+            show_error("Can't reach Envelo right now - check your connection and try again.")
+        elif "error" in result:
+            show_error(result["error"])
+        else:
+            # The server lower-cases emails; show the one it will match on.
+            auth.store_tokens(page, result, email=email.lower())
+            password_field.value = ""
+            # Register lands on the first-run setup checklist (add an account,
+            # import, budget) rather than a dashboard with nothing in it yet;
+            # sign-in returns straight to a budget that already has data.
+            page.navigate(auth.SIGNED_IN_HOME if state["mode"] == "login" else "/first-run")
+        page.update()
+
+    # Enter in either field submits, as it does in every sign-in form.
+    email_field.on_submit = submit
+    password_field.on_submit = submit
 
     card = ft.Container(
         content=ft.Column(
             [
                 ft.Column([title, subtitle], spacing=5, tight=True),
-                text_input(p, placeholder="you@example.com", height=42, expand=True),
-                text_input(p, placeholder="••••••••••", height=42, password=True, expand=True),
+                email_field,
+                password_field,
+                error_text,
                 primary_button(p, cta_text, submit, expand=True, height=44),
                 link_button(p, alt_link, toggle_mode),
             ],

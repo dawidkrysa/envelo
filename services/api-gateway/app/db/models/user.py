@@ -5,6 +5,7 @@ from app.db.models.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if TYPE_CHECKING:
+    from app.db.models.auth import RefreshToken
     from app.db.models.budget import (
         Account,
         CategorizationRule,
@@ -28,6 +29,5 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     payees: Mapped[list["Payee"]] = relationship(back_populates="user")
     statements: Mapped[list["Statement"]] = relationship(back_populates="user")
     transactions: Mapped[list["Transaction"]] = relationship(back_populates="user")
-    categorization_rules: Mapped[list["CategorizationRule"]] = relationship(
-        back_populates="user"
-    )
+    categorization_rules: Mapped[list["CategorizationRule"]] = relationship(back_populates="user")
+    tokens: Mapped[list["RefreshToken"]] = relationship(back_populates="user")

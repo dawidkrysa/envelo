@@ -2,6 +2,8 @@ from pathlib import Path
 
 import flet as ft
 
+import auth
+from config import WEB_RENDERER
 from currency import CURRENCY_STORAGE_KEY, DEFAULT_CURRENCY, set_currency
 from preferences import (
     ALERT_THRESHOLD_STORAGE_KEY,
@@ -60,6 +62,14 @@ async def main(page: ft.Page):
     apply_theme(page)
 
     async def route_change(e=None):
+        # The one guard every route passes through - here rather than in each
+        # view, so a screen added later cannot forget it. Redirecting re-enters
+        # this handler for the new route, hence the early return.
+        redirect = auth.redirect_for(page.route, auth.is_signed_in(page))
+        if redirect is not None:
+            await page.push_route(redirect)
+            return
+
         page.views.clear()
         for route in stack_for_route(page.route):
             page.views.append(await build_view(route, page))
@@ -91,4 +101,4 @@ async def main(page: ft.Page):
 
 
 if __name__ == "__main__":
-    ft.run(main, assets_dir=ASSETS_DIR)
+    ft.run(main, assets_dir=ASSETS_DIR, web_renderer=ft.WebRenderer(WEB_RENDERER))

@@ -53,6 +53,9 @@ services:
       - api-gateway
     environment:
       API_GATEWAY_URL: http://api-gateway:8000
+      # auto | canvaskit | skwasm - see frontend/src/config.py. Set it in .env
+      # to compare how smooth the UI feels; `auto` if unset.
+      FLET_WEB_RENDERER: ${FLET_WEB_RENDERER:-auto}
 
 volumes:
   filetransfers:

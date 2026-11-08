@@ -6,7 +6,7 @@ from collections.abc import Callable
 
 import flet as ft
 
-from theme import RADIUS_BUTTON, Palette, text_style
+from theme import RADIUS_BUTTON, Palette, ink_splash, text_style
 
 
 def _label_control(label: str | ft.Control, style: ft.TextStyle) -> ft.Control:
@@ -28,6 +28,7 @@ def _button(
     padding_x: float = 15,
     expand: bool = False,
     opacity: float = 1.0,
+    ink_color: str | None = None,
 ) -> ft.Container:
     return ft.Container(
         content=_label_control(label, text_style(13.5, weight, color)),
@@ -39,6 +40,9 @@ def _button(
         alignment=ft.Alignment.CENTER,
         # No ink ripple on a button that does nothing.
         ink=on_click is not None,
+        # None falls back to the theme's splash (`theme._theme`), which suits
+        # light surfaces; brand-filled buttons pass their own.
+        ink_color=ink_color,
         on_click=on_click,
         expand=expand,
         opacity=opacity,
@@ -60,6 +64,7 @@ def primary_button(
         color=p.on_brand,
         weight=600,
         on_click=on_click,
+        ink_color=ink_splash(p, on_brand_fill=True),
         padding_x=16,
         expand=expand,
         height=height,
@@ -89,6 +94,7 @@ def secondary_button(
         expand=expand,
         height=height,
         opacity=0.5 if disabled else 1.0,
+        ink_color=ink_splash(p, on_brand_fill=True) if active else None,
     )
 
 

@@ -38,7 +38,7 @@ flowchart TB
 ## Services
 
 ### API Gateway
-Single entry point for the frontend. Routes requests to the appropriate service, handles JWT verification (from Phase 4 onward), and aggregates responses where needed. Built with FastAPI.
+Single entry point for the frontend. Routes requests to the appropriate service, handles JWT verification, and aggregates responses where needed. Built with FastAPI. Until the Auth Service is split out, it also issues the tokens itself (`/auth/*`, HS256 access tokens + rotating refresh tokens stored hashed in `auth.refresh_tokens`) and scopes every budget query to the token's user.
 
 ### Auth Service
 Owns user accounts, password hashing, and JWT issuance. Data lives in the `auth` schema. Split out from the monolith in Phase 7.

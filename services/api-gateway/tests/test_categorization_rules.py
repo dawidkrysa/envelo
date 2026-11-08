@@ -49,4 +49,7 @@ async def test_create_categorization_rule_unknown_envelope_is_rejected(client):
             "phrase": "STARBUCKS",
         },
     )
-    assert response.status_code == 409
+    # 404, not the 409 a foreign-key violation used to produce: the envelope is
+    # now looked up as the caller's before anything is written, and "doesn't
+    # exist" has to look the same as "isn't yours".
+    assert response.status_code == 404

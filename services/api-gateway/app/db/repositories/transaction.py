@@ -3,7 +3,10 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from app.db.models import CategorizationSource, Envelope, Payee, Transaction
-from app.db.repositories.constants import SEED_USER_ID
+from app.db.repositories.account import get_owned_account
+from app.db.repositories.envelope import get_owned_envelope
+from app.db.repositories.payee import get_owned_payee
+from app.db.repositories.statement import get_owned_statement
 from app.schemas.transaction import TransactionCreate, TransactionUpdate
 from fastapi import HTTPException
 from sqlalchemy import delete, func, or_, select, update
@@ -22,6 +25,7 @@ def _as_amount(text: str) -> Decimal | None:
 
 def _filtered_transactions(
     query,
+    user_id: uuid.UUID,
     accountId: uuid.UUID | None,
     envelopeId: uuid.UUID | None,
     categoryGroupId: uuid.UUID | None,
@@ -34,7 +38,12 @@ def _filtered_transactions(
     Shared by `get_transactions` and `count_transactions` so the page and the
     total it is counted against can never be built from different criteria -
     a paginated list whose count disagrees with its rows is worse than no count.
+
+    The user filter lives here for the same reason: neither the page nor its
+    count can be built without it.
     """
+    query = query.where(Transaction.user_id == user_id)
+
     if accountId is not None:
         query = query.where(Transaction.account_id == accountId)
 
@@ -71,6 +80,7 @@ def _filtered_transactions(
 
 async def get_transactions(
     db: AsyncSession,
+    user_id: uuid.UUID,
     accountId: uuid.UUID | None = None,
     envelopeId: uuid.UUID | None = None,
     categoryGroupId: uuid.UUID | None = None,
@@ -88,7 +98,7 @@ async def get_transactions(
     made the last page of a paginated list an error.
     """
     query = _filtered_transactions(
-        select(Transaction), accountId, envelopeId, categoryGroupId, dateFrom, dateTo, q
+        select(Transaction), user_id, accountId, envelopeId, categoryGroupId, dateFrom, dateTo, q
     )
 
     # Newest first, with the id as a tiebreaker. Without an ORDER BY the rows a
@@ -103,6 +113,7 @@ async def get_transactions(
 
 async def count_transactions(
     db: AsyncSession,
+    user_id: uuid.UUID,
     accountId: uuid.UUID | None = None,
     envelopeId: uuid.UUID | None = None,
     categoryGroupId: uuid.UUID | None = None,
@@ -119,6 +130,7 @@ async def count_transactions(
     """
     query = _filtered_transactions(
         select(func.count()).select_from(Transaction),
+        user_id,
         accountId,
         envelopeId,
         categoryGroupId,
@@ -131,6 +143,7 @@ async def count_transactions(
 
 async def get_spent_by_envelope(
     db: AsyncSession,
+    user_id: uuid.UUID,
     dateFrom: date | None = None,
     dateTo: date | None = None,
 ):
@@ -150,7 +163,7 @@ async def get_spent_by_envelope(
     spent = func.sum(-Transaction.amount).label("spent")
     query = (
         select(Transaction.envelope_id, spent)
-        .where(Transaction.amount < 0, Transaction.envelope_id.is_not(None))
+        .where(Transaction.user_id == user_id, Transaction.amount < 0, Transaction.envelope_id.is_not(None))
         .group_by(Transaction.envelope_id)
     )
 
@@ -163,8 +176,37 @@ async def get_spent_by_envelope(
     return [{"envelope_id": envelope_id, "spent": total} for envelope_id, total in result.all()]
 
 
-async def create_transaction(db: AsyncSession, data: TransactionCreate):
-    transaction = Transaction(**data.model_dump(), user_id=SEED_USER_ID)
+async def _check_references(db: AsyncSession, user_id: uuid.UUID, values: dict) -> None:
+    """404 unless every account/envelope/payee/statement id in `values` is the
+    user's.
+
+    The foreign keys only prove a row exists, not whose it is - without this a
+    user who learned another's envelope id could file their own spending into it
+    and quietly drain someone else's budget.
+    """
+    if values.get("account_id") is not None:
+        await get_owned_account(db, user_id, values["account_id"])
+    if values.get("envelope_id") is not None:
+        await get_owned_envelope(db, user_id, values["envelope_id"])
+    if values.get("payee_id") is not None:
+        await get_owned_payee(db, user_id, values["payee_id"])
+    if values.get("statement_id") is not None:
+        await get_owned_statement(db, user_id, values["statement_id"])
+
+
+async def get_owned_transaction(db: AsyncSession, user_id: uuid.UUID, transaction_id: uuid.UUID) -> Transaction:
+    result = await db.execute(
+        select(Transaction).where(Transaction.id == transaction_id, Transaction.user_id == user_id)
+    )
+    transaction = result.scalar_one_or_none()
+    if transaction is None:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    return transaction
+
+
+async def create_transaction(db: AsyncSession, user_id: uuid.UUID, data: TransactionCreate):
+    await _check_references(db, user_id, data.model_dump())
+    transaction = Transaction(**data.model_dump(), user_id=user_id)
     db.add(transaction)
     try:
         await db.commit()
@@ -177,17 +219,11 @@ async def create_transaction(db: AsyncSession, data: TransactionCreate):
     return transaction
 
 
-async def update_transaction(
-    db: AsyncSession, transactionId: uuid.UUID, data: TransactionUpdate
-):
-    result = await db.execute(
-        select(Transaction).where(Transaction.id == transactionId)
-    )
-    transaction = result.scalar_one_or_none()
-    if transaction is None:
-        raise HTTPException(status_code=404, detail="Transaction not found")
+async def update_transaction(db: AsyncSession, user_id: uuid.UUID, transactionId: uuid.UUID, data: TransactionUpdate):
+    transaction = await get_owned_transaction(db, user_id, transactionId)
 
     values = data.model_dump(exclude_unset=True)
+    await _check_references(db, user_id, values)
     if "envelope_id" in values or "payee_id" in values:
         values["categorization_source"] = CategorizationSource.MANUAL
 
@@ -208,13 +244,8 @@ async def update_transaction(
     return transaction
 
 
-async def delete_transaction(db: AsyncSession, transactionId: uuid.UUID):
-    result = await db.execute(
-        select(Transaction).where(Transaction.id == transactionId)
-    )
-    transaction = result.scalar_one_or_none()
-    if transaction is None:
-        raise HTTPException(status_code=404, detail="Transaction not found")
+async def delete_transaction(db: AsyncSession, user_id: uuid.UUID, transactionId: uuid.UUID):
+    transaction = await get_owned_transaction(db, user_id, transactionId)
 
     await db.execute(delete(Transaction).where(Transaction.id == transactionId))
     await db.commit()

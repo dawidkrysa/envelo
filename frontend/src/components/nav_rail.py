@@ -182,8 +182,13 @@ def build_nav(
     category_groups: list[CategoryGroupNav] | None = None,
     category_groups_collapsed: bool = False,
     on_toggle_category_groups: Callable[[ft.ControlEvent], None] | None = None,
+    user_email: str | None = None,
 ) -> ft.Control:
-    """`band` is "mobile" | "tablet" | "desktop" from `theme.layout_band`."""
+    """`band` is "mobile" | "tablet" | "desktop" from `theme.layout_band`.
+
+    `user_email` is the signed-in account's address - the only thing the API
+    knows about a user, so it stands in for the name the design shows there.
+    """
     is_mobile = band == "mobile"
     is_tablet = band == "tablet"
     is_desktop = band == "desktop"
@@ -291,7 +296,10 @@ def build_nav(
                 content=ft.Row(
                     [
                         ft.Container(
-                            content=ft.Text("DK", style=text_style(11.5, 500, p.link)),
+                            # Was "DK" / "Dawid Krysa", hardcoded for everyone.
+                            content=ft.Text(
+                                (user_email or "?")[:1].upper(), style=text_style(11.5, 500, p.link)
+                            ),
                             width=28,
                             height=28,
                             bgcolor=p.ok_fill,
@@ -300,7 +308,13 @@ def build_nav(
                         ),
                         ft.Column(
                             [
-                                ft.Text("Dawid Krysa", style=text_style(12.5, 500, p.ink)),
+                                ft.Text(
+                                    user_email or "Signed in",
+                                    style=text_style(12.5, 500, p.ink),
+                                    max_lines=1,
+                                    overflow=ft.TextOverflow.ELLIPSIS,
+                                    width=150,
+                                ),
                                 ft.Container(
                                     content=ft.Text("Settings", style=text_style(11, 400, p.ink3)),
                                     # Every other handler in this file takes `e` -

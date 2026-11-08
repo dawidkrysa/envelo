@@ -5,6 +5,12 @@ from app.schemas.account import (
     AccountRead,
     AccountUpdate,
 )
+from app.schemas.auth import (
+    RefreshRequest,
+    TokenPair,
+    UserLogin,
+    UserRegister,
+)
 from app.schemas.categorization_rule import (
     CategorizationRuleCreate,
     CategorizationRuleDelete,
@@ -64,6 +70,10 @@ __all__ = [
     "AccountUpdate",
     "AccountDelete",
     "AccountBalanceRead",
+    "UserRegister",
+    "UserLogin",
+    "TokenPair",
+    "RefreshRequest",
     "CategorizationRuleRead",
     "CategorizationRuleCreate",
     "CategorizationRuleUpdate",

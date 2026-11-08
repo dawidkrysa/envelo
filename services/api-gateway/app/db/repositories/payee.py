@@ -2,7 +2,6 @@ import uuid
 from decimal import Decimal
 
 from app.db.models import Payee, Transaction
-from app.db.repositories.constants import SEED_USER_ID
 from app.schemas.payee import PayeeCreate, PayeeMerge, PayeeUpdate
 from fastapi import HTTPException
 from sqlalchemy import delete, func, select, update
@@ -10,15 +9,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
-async def get_payees(db: AsyncSession, skip: int = 0, limit: int = 100):
-    result = await db.execute(select(Payee).offset(skip).limit(limit))
+async def get_payees(db: AsyncSession, user_id: uuid.UUID, skip: int = 0, limit: int = 100):
+    result = await db.execute(select(Payee).where(Payee.user_id == user_id).offset(skip).limit(limit))
     payees = result.scalars().all()
     if not payees:
         raise HTTPException(status_code=404, detail="Payees not found")
     return payees
 
 
-async def get_payee_stats(db: AsyncSession):
+async def get_payee_stats(db: AsyncSession, user_id: uuid.UUID):
     """What each payee actually amounts to: how many transactions, their signed
     total, the most recent one, and where they usually get filed.
 
@@ -35,7 +34,7 @@ async def get_payee_stats(db: AsyncSession):
     created by hand is real, and dropping it here would make this screen disagree
     with `GET /budget/payees`.
     """
-    payees = (await db.execute(select(Payee).order_by(Payee.name))).scalars().all()
+    payees = (await db.execute(select(Payee).where(Payee.user_id == user_id).order_by(Payee.name))).scalars().all()
 
     totals = {
         payee_id: (total, count, last_date)
@@ -47,7 +46,7 @@ async def get_payee_stats(db: AsyncSession):
                     func.count(Transaction.id),
                     func.max(Transaction.transaction_date),
                 )
-                .where(Transaction.payee_id.is_not(None))
+                .where(Transaction.user_id == user_id, Transaction.payee_id.is_not(None))
                 .group_by(Transaction.payee_id)
             )
         ).all()
@@ -64,7 +63,9 @@ async def get_payee_stats(db: AsyncSession):
                 func.count(Transaction.id).label("count"),
             )
             .where(
-                Transaction.payee_id.is_not(None), Transaction.envelope_id.is_not(None)
+                Transaction.user_id == user_id,
+                Transaction.payee_id.is_not(None),
+                Transaction.envelope_id.is_not(None),
             )
             .group_by(Transaction.payee_id, Transaction.envelope_id)
         )
@@ -90,7 +91,7 @@ async def get_payee_stats(db: AsyncSession):
     ]
 
 
-async def merge_payees(db: AsyncSession, data: PayeeMerge):
+async def merge_payees(db: AsyncSession, user_id: uuid.UUID, data: PayeeMerge):
     """Fold one payee into another: its transactions are repointed, then it is
     deleted.
 
@@ -105,7 +106,7 @@ async def merge_payees(db: AsyncSession, data: PayeeMerge):
         raise HTTPException(status_code=400, detail="Cannot merge a payee into itself")
 
     result = await db.execute(
-        select(Payee).where(Payee.id.in_([data.from_payee_id, data.into_payee_id]))
+        select(Payee).where(Payee.id.in_([data.from_payee_id, data.into_payee_id]), Payee.user_id == user_id)
     )
     found = {payee.id: payee for payee in result.scalars()}
     for payee_id in (data.from_payee_id, data.into_payee_id):
@@ -123,11 +124,17 @@ async def merge_payees(db: AsyncSession, data: PayeeMerge):
     return found[data.into_payee_id]
 
 
-async def delete_payee(db: AsyncSession, payeeId: uuid.UUID):
-    result = await db.execute(select(Payee).where(Payee.id == payeeId))
+async def get_owned_payee(db: AsyncSession, user_id: uuid.UUID, payee_id: uuid.UUID) -> Payee:
+    """The user's payee, or 404 - also when it exists but is someone else's."""
+    result = await db.execute(select(Payee).where(Payee.id == payee_id, Payee.user_id == user_id))
     payee = result.scalar_one_or_none()
     if payee is None:
         raise HTTPException(status_code=404, detail="Payee not found")
+    return payee
+
+
+async def delete_payee(db: AsyncSession, user_id: uuid.UUID, payeeId: uuid.UUID):
+    payee = await get_owned_payee(db, user_id, payeeId)
 
     try:
         await db.execute(delete(Payee).where(Payee.id == payeeId))
@@ -141,11 +148,8 @@ async def delete_payee(db: AsyncSession, payeeId: uuid.UUID):
     return payee
 
 
-async def update_payee(db: AsyncSession, payeeId: uuid.UUID, data: PayeeUpdate):
-    result = await db.execute(select(Payee).where(Payee.id == payeeId))
-    payee = result.scalar_one_or_none()
-    if payee is None:
-        raise HTTPException(status_code=404, detail="Payee not found")
+async def update_payee(db: AsyncSession, user_id: uuid.UUID, payeeId: uuid.UUID, data: PayeeUpdate):
+    payee = await get_owned_payee(db, user_id, payeeId)
 
     values = data.model_dump(exclude_unset=True)
     if values:
@@ -155,15 +159,15 @@ async def update_payee(db: AsyncSession, payeeId: uuid.UUID, data: PayeeUpdate):
     return payee
 
 
-async def create_payee(db: AsyncSession, data: PayeeCreate):
-    payee = Payee(**data.model_dump(), user_id=SEED_USER_ID)
+async def create_payee(db: AsyncSession, user_id: uuid.UUID, data: PayeeCreate):
+    payee = Payee(**data.model_dump(), user_id=user_id)
     db.add(payee)
     await db.commit()
     await db.refresh(payee)
     return payee
 
 
-async def get_or_create_payee(db: AsyncSession, name: str) -> Payee:
+async def get_or_create_payee(db: AsyncSession, user_id: uuid.UUID, name: str) -> Payee:
     normalized_name = name.strip()
 
     # `.first()` with an explicit order, not `.scalar_one_or_none()`: there is no
@@ -174,7 +178,7 @@ async def get_or_create_payee(db: AsyncSession, name: str) -> Payee:
     # to the same payee instead of drifting between them.
     result = await db.execute(
         select(Payee)
-        .where(func.lower(Payee.name) == normalized_name.lower())
+        .where(Payee.user_id == user_id, func.lower(Payee.name) == normalized_name.lower())
         .order_by(Payee.id)
         .limit(1)
     )
@@ -182,7 +186,7 @@ async def get_or_create_payee(db: AsyncSession, name: str) -> Payee:
     if payee is not None:
         return payee
 
-    payee = Payee(name=normalized_name, user_id=SEED_USER_ID)
+    payee = Payee(name=normalized_name, user_id=user_id)
     db.add(payee)
     await db.commit()
     await db.refresh(payee)

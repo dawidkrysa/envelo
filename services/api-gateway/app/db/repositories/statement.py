@@ -3,8 +3,8 @@ import uuid
 
 import aiofiles
 from app.core.config import get_settings
-from app.db.models import Account, FileFormat, FileTransferStatus, Statement
-from app.db.repositories.constants import SEED_USER_ID
+from app.db.models import FileFormat, FileTransferStatus, Statement
+from app.db.repositories.account import get_owned_account
 from app.schemas.statement import StatementCreate, StatementUpdate
 from app.services.statement_import import import_statement
 from fastapi import HTTPException
@@ -13,25 +13,28 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
-async def get_statements(db: AsyncSession, accountId: uuid.UUID | None = None):
-    if accountId is None:
-        result = await db.execute(select(Statement))
-    else:
-        result = await db.execute(
-            select(Statement).where(Statement.account_id == accountId)
-        )
+async def get_statements(db: AsyncSession, user_id: uuid.UUID, accountId: uuid.UUID | None = None):
+    query = select(Statement).where(Statement.user_id == user_id)
+    if accountId is not None:
+        query = query.where(Statement.account_id == accountId)
 
-    statements = result.scalars().all()
+    statements = (await db.execute(query)).scalars().all()
     if not statements:
         raise HTTPException(status_code=404, detail="Statements not found")
     return statements
 
 
-async def delete_statement(db: AsyncSession, statementId: uuid.UUID):
-    result = await db.execute(select(Statement).where(Statement.id == statementId))
+async def get_owned_statement(db: AsyncSession, user_id: uuid.UUID, statement_id: uuid.UUID) -> Statement:
+    """The user's statement, or 404 - also when it exists but is someone else's."""
+    result = await db.execute(select(Statement).where(Statement.id == statement_id, Statement.user_id == user_id))
     statement = result.scalar_one_or_none()
     if statement is None:
         raise HTTPException(status_code=404, detail="Statement not found")
+    return statement
+
+
+async def delete_statement(db: AsyncSession, user_id: uuid.UUID, statementId: uuid.UUID):
+    statement = await get_owned_statement(db, user_id, statementId)
 
     try:
         await db.execute(delete(Statement).where(Statement.id == statementId))
@@ -45,15 +48,12 @@ async def delete_statement(db: AsyncSession, statementId: uuid.UUID):
     return statement
 
 
-async def update_statement(
-    db: AsyncSession, statementId: uuid.UUID, data: StatementUpdate
-):
-    result = await db.execute(select(Statement).where(Statement.id == statementId))
-    statement = result.scalar_one_or_none()
-    if statement is None:
-        raise HTTPException(status_code=404, detail="Statement not found")
+async def update_statement(db: AsyncSession, user_id: uuid.UUID, statementId: uuid.UUID, data: StatementUpdate):
+    statement = await get_owned_statement(db, user_id, statementId)
 
     values = data.model_dump(exclude_unset=True)
+    if values.get("account_id") is not None:
+        await get_owned_account(db, user_id, values["account_id"])
     if values:
         await db.execute(
             update(Statement).where(Statement.id == statementId).values(**values)
@@ -63,10 +63,8 @@ async def update_statement(
     return statement
 
 
-async def create_statement(db: AsyncSession, data: StatementCreate):
-    result = await db.execute(select(Account).where(Account.id == data.account_id))
-    if result.scalar_one_or_none() is None:
-        raise HTTPException(status_code=404, detail="Account not found")
+async def create_statement(db: AsyncSession, user_id: uuid.UUID, data: StatementCreate):
+    await get_owned_account(db, user_id, data.account_id)
 
     filename = data.file.filename or ""
     extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
@@ -106,7 +104,7 @@ async def create_statement(db: AsyncSession, data: StatementCreate):
 
     statement = Statement(
         id=statement_id,
-        user_id=SEED_USER_ID,
+        user_id=user_id,
         account_id=data.account_id,
         filename=filename,
         format=file_format,

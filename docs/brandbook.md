@@ -119,6 +119,13 @@ colored by state, never flat red. See `mock_data.format_money`.
 - Local component state (tab switching, group collapse/expand, the
   light/dark toggle) re-renders instantly with no transition, matching the
   design's own snappy `fadeup` being reserved for full-page mounts only.
+- **Interaction states** are tinted overlays drawn by the client itself, never
+  a server round trip per pointer move:
+  - *Hover*: `ink` at 5% (light) / 7% (dark) over whatever the control sits on.
+  - *Pressed highlight*: `ink` at 8% / 10%.
+  - *Splash* (the ripple from the press point): `ink` at 10% / 14% on light
+    surfaces; on a `brand`-filled Primary button, `onBrand` at 22% instead -
+    a grey ripple over the deep forest fill reads as dirt, not feedback.
 
 ## 6. Components
 

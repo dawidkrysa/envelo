@@ -10,16 +10,18 @@ from datetime import date
 
 import flet as ft
 
+import auth
 from api_client import (
     get_category_groups,
     get_envelope_allocations,
     get_envelopes,
     get_spent_by_envelope,
 )
+from components.button import secondary_button
 from components.nav_rail import CategoryGroupNav, build_nav
 from currency import format_money
 from mock_data import Envelope, envelope_state
-from theme import Palette, content_padding, layout_band, palette
+from theme import Palette, content_padding, layout_band, palette, text_style
 from utils import range_to_dates, resolve_target, to_envelope
 
 PREFILL_SEARCH_KEY = "prefill_transaction_search"
@@ -40,6 +42,18 @@ preference in `preferences.py`. A budget with a dozen groups pushed the user
 footer (and Settings, below it) off the bottom of the sidebar with no scrollbar
 to hint anything was cut off; collapsing the list is a per-visit fix for that,
 not a choice worth surviving a restart."""
+
+SETUP_IN_PROGRESS_KEY = "envelo.setup_in_progress"
+"""Session-store flag: this person started the first-run checklist and has not
+finished it.
+
+Each checklist step opens the real screen that does the job (Accounts, Import,
+Envelopes) rather than a copy of it - but those screens are part of the app
+proper and had no way back, so whoever finished step one was left with steps
+two and three unreachable. While this is set, `app_shell` shows a "Back to
+setup" bar on every main screen. First-run sets it and clears it itself, from
+what the API says is done - nothing else needs to remember to.
+"""
 
 
 def page_band(page: ft.Page) -> str:
@@ -244,6 +258,7 @@ async def app_shell(
             category_groups=category_groups,
             category_groups_collapsed=bool(page.session.store.get(CATEGORY_GROUPS_COLLAPSED_KEY)),
             on_toggle_category_groups=toggle_category_groups,
+            user_email=auth.signed_in_email(page),
         )
 
     nav_holder = ft.Container(content=await build_nav_control(snapshot))
@@ -265,6 +280,8 @@ async def app_shell(
 
     page.refresh_nav = refresh_nav
 
+    if page.session.store.get(SETUP_IN_PROGRESS_KEY):
+        body = [_setup_bar(p, lambda e: page.navigate("/first-run")), *body]
     main = _content_column(page, band, body)
 
     if band == "mobile":
@@ -278,6 +295,30 @@ async def app_shell(
         padding=0,
         spacing=0,
         bgcolor=p.canvas,
+    )
+
+
+def _setup_bar(p: Palette, on_back) -> ft.Container:
+    # A plain (non-wrap) Row: a button as a direct child of `wrap=True` paints
+    # as a grey box in flet-web (see CLAUDE.md).
+    return ft.Container(
+        content=ft.Row(
+            [
+                ft.Icon(ft.Icons.CHECKLIST_ROUNDED, size=17, color=p.ok_ink),
+                ft.Text(
+                    "You're setting up Envelo - come back to the checklist when this step is done.",
+                    style=text_style(13, 400, p.ink),
+                    expand=True,
+                ),
+                secondary_button(p, "Back to setup", on_back, height=34),
+            ],
+            spacing=10,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        bgcolor=p.ok_fill,
+        border=ft.Border.all(1, p.ok_border),
+        border_radius=12,
+        padding=ft.Padding.only(left=14, right=8, top=8, bottom=8),
     )
 
 

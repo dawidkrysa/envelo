@@ -2,7 +2,6 @@ import uuid
 from decimal import Decimal
 
 from app.db.models import Account, Statement, Transaction
-from app.db.repositories.constants import SEED_USER_ID
 from app.schemas.account import AccountCreate, AccountUpdate
 from fastapi import HTTPException
 from sqlalchemy import delete, func, select, update
@@ -10,15 +9,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
-async def get_accounts(db: AsyncSession, skip: int = 0, limit: int = 100):
-    result = await db.execute(select(Account).offset(skip).limit(limit))
+async def get_accounts(db: AsyncSession, user_id: uuid.UUID, skip: int = 0, limit: int = 100):
+    result = await db.execute(select(Account).where(Account.user_id == user_id).offset(skip).limit(limit))
     accounts = result.scalars().all()
     if not accounts:
         raise HTTPException(status_code=404, detail="Accounts not found")
     return accounts
 
 
-async def get_account_balances(db: AsyncSession):
+async def get_account_balances(db: AsyncSession, user_id: uuid.UUID):
     """Where each account actually stands: its cash balance, how many
     transactions are behind it, and when it was last imported into.
 
@@ -34,7 +33,9 @@ async def get_account_balances(db: AsyncSession):
     `last_imported_at` comes from the account's newest statement and is `None`
     for an account whose transactions were all entered by hand.
     """
-    accounts = (await db.execute(select(Account).order_by(Account.name))).scalars().all()
+    accounts = (
+        (await db.execute(select(Account).where(Account.user_id == user_id).order_by(Account.name))).scalars().all()
+    )
 
     totals = {
         account_id: (balance, count)
@@ -44,7 +45,9 @@ async def get_account_balances(db: AsyncSession):
                     Transaction.account_id,
                     func.sum(Transaction.amount),
                     func.count(Transaction.id),
-                ).group_by(Transaction.account_id)
+                )
+                .where(Transaction.user_id == user_id)
+                .group_by(Transaction.account_id)
             )
         ).all()
     }
@@ -53,9 +56,9 @@ async def get_account_balances(db: AsyncSession):
         account_id: imported_at
         for account_id, imported_at in (
             await db.execute(
-                select(Statement.account_id, func.max(Statement.imported_at)).group_by(
-                    Statement.account_id
-                )
+                select(Statement.account_id, func.max(Statement.imported_at))
+                .where(Statement.user_id == user_id)
+                .group_by(Statement.account_id)
             )
         ).all()
     }
@@ -71,11 +74,16 @@ async def get_account_balances(db: AsyncSession):
     ]
 
 
-async def delete_account(db: AsyncSession, accountId: uuid.UUID):
-    result = await db.execute(select(Account).where(Account.id == accountId))
+async def get_owned_account(db: AsyncSession, user_id: uuid.UUID, account_id: uuid.UUID) -> Account:
+    result = await db.execute(select(Account).where(Account.id == account_id, Account.user_id == user_id))
     account = result.scalar_one_or_none()
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found")
+    return account
+
+
+async def delete_account(db: AsyncSession, user_id: uuid.UUID, accountId: uuid.UUID):
+    account = await get_owned_account(db, user_id, accountId)
 
     try:
         await db.execute(delete(Account).where(Account.id == accountId))
@@ -89,24 +97,19 @@ async def delete_account(db: AsyncSession, accountId: uuid.UUID):
     return account
 
 
-async def update_account(db: AsyncSession, accountId: uuid.UUID, data: AccountUpdate):
-    result = await db.execute(select(Account).where(Account.id == accountId))
-    account = result.scalar_one_or_none()
-    if account is None:
-        raise HTTPException(status_code=404, detail="Account not found")
+async def update_account(db: AsyncSession, user_id: uuid.UUID, accountId: uuid.UUID, data: AccountUpdate):
+    account = await get_owned_account(db, user_id, accountId)
 
     values = data.model_dump(exclude_unset=True)
     if values:
-        await db.execute(
-            update(Account).where(Account.id == accountId).values(**values)
-        )
+        await db.execute(update(Account).where(Account.id == accountId).values(**values))
         await db.commit()
         await db.refresh(account)
     return account
 
 
-async def create_account(db: AsyncSession, data: AccountCreate):
-    account = Account(**data.model_dump(), user_id=SEED_USER_ID)
+async def create_account(db: AsyncSession, user_id: uuid.UUID, data: AccountCreate):
+    account = Account(**data.model_dump(), user_id=user_id)
     db.add(account)
     await db.commit()
     await db.refresh(account)

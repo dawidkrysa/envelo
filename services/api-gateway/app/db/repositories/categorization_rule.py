@@ -1,7 +1,7 @@
 import uuid
 
 from app.db.models import CategorizationRule, Transaction
-from app.db.repositories.constants import SEED_USER_ID
+from app.db.repositories.envelope import get_owned_envelope
 from app.schemas.categorization_rule import (
     CategorizationRuleCreate,
     CategorizationRuleUpdate,
@@ -12,72 +12,73 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
-async def get_categorization_rules(db: AsyncSession, skip: int = 0, limit: int = 100):
-    result = await db.execute(select(CategorizationRule).offset(skip).limit(limit))
+async def get_categorization_rules(db: AsyncSession, user_id: uuid.UUID, skip: int = 0, limit: int = 100):
+    result = await db.execute(
+        select(CategorizationRule).where(CategorizationRule.user_id == user_id).offset(skip).limit(limit)
+    )
     rules = result.scalars().all()
     if not rules:
         raise HTTPException(status_code=404, detail="Categorization rules not found")
     return rules
 
 
-async def create_categorization_rule(db: AsyncSession, data: CategorizationRuleCreate):
-    rule = CategorizationRule(**data.model_dump(), user_id=SEED_USER_ID)
+async def get_owned_categorization_rule(
+    db: AsyncSession, user_id: uuid.UUID, categorization_rule_id: uuid.UUID
+) -> CategorizationRule:
+    result = await db.execute(
+        select(CategorizationRule).where(
+            CategorizationRule.id == categorization_rule_id, CategorizationRule.user_id == user_id
+        )
+    )
+    rule = result.scalar_one_or_none()
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Categorization rule not found")
+    return rule
+
+
+async def create_categorization_rule(db: AsyncSession, user_id: uuid.UUID, data: CategorizationRuleCreate):
+    await get_owned_envelope(db, user_id, data.envelope_id)
+    rule = CategorizationRule(**data.model_dump(), user_id=user_id)
     db.add(rule)
     try:
         await db.commit()
     except IntegrityError:
-        raise HTTPException(
-            status_code=409, detail="Invalid reference: envelope does not exist."
-        )
+        raise HTTPException(status_code=409, detail="Invalid reference: envelope does not exist.")
     await db.refresh(rule)
     return rule
 
 
 async def update_categorization_rule(
-    db: AsyncSession, categorizationRuleId: uuid.UUID, data: CategorizationRuleUpdate
+    db: AsyncSession, user_id: uuid.UUID, categorizationRuleId: uuid.UUID, data: CategorizationRuleUpdate
 ):
-    result = await db.execute(
-        select(CategorizationRule).where(CategorizationRule.id == categorizationRuleId)
-    )
-    rule = result.scalar_one_or_none()
-    if rule is None:
-        raise HTTPException(status_code=404, detail="Categorization rule not found")
+    rule = await get_owned_categorization_rule(db, user_id, categorizationRuleId)
 
     values = data.model_dump(exclude_unset=True)
+    if values.get("envelope_id") is not None:
+        await get_owned_envelope(db, user_id, values["envelope_id"])
     if values:
         try:
             await db.execute(
-                update(CategorizationRule)
-                .where(CategorizationRule.id == categorizationRuleId)
-                .values(**values)
+                update(CategorizationRule).where(CategorizationRule.id == categorizationRuleId).values(**values)
             )
             await db.commit()
         except IntegrityError:
-            raise HTTPException(
-                status_code=409, detail="Invalid reference: envelope does not exist."
-            )
+            raise HTTPException(status_code=409, detail="Invalid reference: envelope does not exist.")
         await db.refresh(rule)
     return rule
 
 
-async def delete_categorization_rule(db: AsyncSession, categorizationRuleId: uuid.UUID):
-    result = await db.execute(
-        select(CategorizationRule).where(CategorizationRule.id == categorizationRuleId)
-    )
-    rule = result.scalar_one_or_none()
-    if rule is None:
-        raise HTTPException(status_code=404, detail="Categorization rule not found")
+async def delete_categorization_rule(db: AsyncSession, user_id: uuid.UUID, categorizationRuleId: uuid.UUID):
+    rule = await get_owned_categorization_rule(db, user_id, categorizationRuleId)
 
-    await db.execute(
-        delete(CategorizationRule).where(CategorizationRule.id == categorizationRuleId)
-    )
+    await db.execute(delete(CategorizationRule).where(CategorizationRule.id == categorizationRuleId))
     await db.commit()
 
     return rule
 
 
 async def match_envelope_for_transaction(
-    db: AsyncSession, payee_id: uuid.UUID | None, payee_name: str | None
+    db: AsyncSession, user_id: uuid.UUID, payee_id: uuid.UUID | None, payee_name: str | None
 ) -> uuid.UUID | None:
     """Which envelope an imported transaction belongs in, if we can tell.
 
@@ -93,12 +94,15 @@ async def match_envelope_for_transaction(
     dead exactly for the payees you have most reason to write a rule about. A
     rule is something you stated; history is something we inferred.
 
+    Both signals are the user's own - their rules, their history - so one
+    person's filing habits never decide where another's transactions land.
+
     Returns `None` when neither has an opinion - an uncategorized transaction is
     a fine outcome, and guessing would cost more to unpick than to do by hand.
     """
     if payee_name:
         categorization_rules = await db.execute(
-            select(CategorizationRule).where(CategorizationRule.user_id == SEED_USER_ID)
+            select(CategorizationRule).where(CategorizationRule.user_id == user_id)
         )
 
         matches: list[CategorizationRule] = []
@@ -111,11 +115,11 @@ async def match_envelope_for_transaction(
 
     if payee_id is not None:
         result = await db.execute(
-            select(
-                Transaction.envelope_id, func.count(Transaction.payee_id).label("count")
-            )
+            select(Transaction.envelope_id, func.count(Transaction.payee_id).label("count"))
             .where(
-                Transaction.payee_id == payee_id, Transaction.envelope_id.isnot(None)
+                Transaction.user_id == user_id,
+                Transaction.payee_id == payee_id,
+                Transaction.envelope_id.isnot(None),
             )
             .group_by(Transaction.envelope_id)
             .order_by(desc("count"))

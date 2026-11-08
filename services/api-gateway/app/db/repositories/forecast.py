@@ -14,6 +14,7 @@ instead of being implied.
 """
 
 import calendar
+import uuid
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -50,7 +51,7 @@ def _project(spent: Decimal, elapsed_fraction: Decimal) -> Decimal:
 
 
 async def _assigned_by_envelope(
-    db: AsyncSession, month: date, before: bool
+    db: AsyncSession, user_id: uuid.UUID, month: date, before: bool
 ) -> dict[str, Decimal]:
     """Assignments for one month, or everything assigned before it.
 
@@ -59,8 +60,12 @@ async def _assigned_by_envelope(
     than it is.
     """
     total = func.sum(EnvelopeAllocation.assigned_amount)
-    query = select(EnvelopeAllocation.envelope_id, total).group_by(
-        EnvelopeAllocation.envelope_id
+    # Allocations have no owner column; they are the user's through their envelope.
+    query = (
+        select(EnvelopeAllocation.envelope_id, total)
+        .join(Envelope, EnvelopeAllocation.envelope_id == Envelope.id)
+        .where(Envelope.user_id == user_id)
+        .group_by(EnvelopeAllocation.envelope_id)
     )
     query = query.where(
         EnvelopeAllocation.month < month if before else EnvelopeAllocation.month == month
@@ -71,6 +76,7 @@ async def _assigned_by_envelope(
 
 async def get_forecast(
     db: AsyncSession,
+    user_id: uuid.UUID,
     month: date | None = None,
     asOf: date | None = None,
 ) -> dict:
@@ -99,25 +105,25 @@ async def get_forecast(
 
     envelope_rows = (
         await db.execute(
-            select(Envelope.id, Envelope.category_group_id).order_by(Envelope.name)
+            select(Envelope.id, Envelope.category_group_id).where(Envelope.user_id == user_id).order_by(Envelope.name)
         )
     ).all()
     group_ids = (
-        await db.execute(select(CategoryGroup.id).order_by(CategoryGroup.sort_order))
+        await db.execute(select(CategoryGroup.id).where(CategoryGroup.user_id == user_id).order_by(CategoryGroup.sort_order))
     ).scalars().all()
 
-    assigned = await _assigned_by_envelope(db, month_start, before=False)
-    assigned_before = await _assigned_by_envelope(db, month_start, before=True)
+    assigned = await _assigned_by_envelope(db, user_id, month_start, before=False)
+    assigned_before = await _assigned_by_envelope(db, user_id, month_start, before=True)
 
     # Both spending figures come from the same aggregate as every other screen,
     # so "spent" here can never disagree with the Envelopes ledger.
     spent_now = {
         row["envelope_id"]: row["spent"]
-        for row in await get_spent_by_envelope(db, month_start, month_end)
+        for row in await get_spent_by_envelope(db, user_id, month_start, month_end)
     }
     spent_before = {
         row["envelope_id"]: row["spent"]
-        for row in await get_spent_by_envelope(db, None, month_start - timedelta(days=1))
+        for row in await get_spent_by_envelope(db, user_id, None, month_start - timedelta(days=1))
     }
 
     zero = Decimal("0")

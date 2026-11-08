@@ -1,6 +1,8 @@
-"""Home ("/") - the app's entry point. This static prototype has no real
-auth, so "/" simply shows the Login screen; "Sign in" moves on to the
-Dashboard."""
+"""Home ("/") - the app's entry point, and the base of every view stack.
+
+It shows the Login screen. A signed-in session never lands here:
+`main.route_change` forwards "/" to the dashboard, so popping back to the
+bottom of the stack does not appear to sign anyone out."""
 
 import flet as ft
 

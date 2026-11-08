@@ -5,6 +5,13 @@ from app.db.repositories.account import (
     get_accounts,
     update_account,
 )
+from app.db.repositories.auth import (
+    authenticate_user,
+    create_user,
+    issue_token_pair,
+    revoke_refresh_token,
+    rotate_refresh_token,
+)
 from app.db.repositories.categorization_rule import (
     create_categorization_rule,
     delete_categorization_rule,
@@ -94,4 +101,9 @@ __all__ = [
     "create_transaction",
     "update_transaction",
     "delete_transaction",
+    "authenticate_user",
+    "create_user",
+    "issue_token_pair",
+    "revoke_refresh_token",
+    "rotate_refresh_token",
 ]
