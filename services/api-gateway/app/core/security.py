@@ -12,8 +12,6 @@ ph = PasswordHasher()
 ALGORITHM = "HS256"
 ISSUER = AUDIENCE = "envelo-api-gateway"
 
-settings = get_settings()
-
 
 def hash_password(password: str) -> str:
     return ph.hash(password)
@@ -29,20 +27,25 @@ def verify_password(password: str, password_hash: str) -> bool:
 def create_access_token(user_id: uuid.UUID) -> str:
     sub = str(user_id)
     iat = datetime.now(timezone.utc)
-    exp = datetime.now(timezone.utc) + timedelta(minutes=settings.jwt_access_token_expire_minutes)
+    exp = datetime.now(timezone.utc) + timedelta(minutes=get_settings().jwt_access_token_expire_minutes)
     aud = AUDIENCE
     iss = ISSUER
 
     return jwt.encode(
         {"sub": sub, "iat": iat, "exp": exp, "aud": aud, "iss": iss},
-        settings.jwt_secret.get_secret_value(),
+        get_settings().jwt_secret.get_secret_value(),
         algorithm=ALGORITHM,
     )
 
 
 def decode_access_token(token: str) -> uuid.UUID:
     payload = jwt.decode(
-        token, settings.jwt_secret.get_secret_value(), algorithms=[ALGORITHM], audience=AUDIENCE, issuer=ISSUER
+        token,
+        get_settings().jwt_secret.get_secret_value(),
+        algorithms=[ALGORITHM],
+        audience=AUDIENCE,
+        issuer=ISSUER,
+        options={"require": ["exp", "iat", "sub"]},
     )
     return uuid.UUID(payload["sub"])
 

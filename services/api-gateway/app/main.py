@@ -5,6 +5,7 @@ from datetime import date
 from typing import Annotated
 
 from app import schemas
+from app.core.deps import get_current_user_id, unauthorized
 from app.core.logging import setup_logging
 from app.db import repositories as repo
 from app.db.session import engine, get_db
@@ -31,37 +32,32 @@ def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
-accounts_router = APIRouter(prefix="/budget/accounts", tags=["Accounts"])
-payees_router = APIRouter(prefix="/budget/payees", tags=["Payees"])
+# Every /budget/* router requires a valid access token. Declared on the router
+# rather than on each handler so that a new endpoint cannot be added without
+# it; /health and /auth/* stay public.
+_requires_auth = [Depends(get_current_user_id)]
+
+accounts_router = APIRouter(prefix="/budget/accounts", tags=["Accounts"], dependencies=_requires_auth)
+payees_router = APIRouter(prefix="/budget/payees", tags=["Payees"], dependencies=_requires_auth)
 category_groups_router = APIRouter(
-    prefix="/budget/category-groups", tags=["Category Groups"]
+    prefix="/budget/category-groups", tags=["Category Groups"], dependencies=_requires_auth
 )
-envelopes_router = APIRouter(prefix="/budget/envelopes", tags=["Envelopes"])
+envelopes_router = APIRouter(prefix="/budget/envelopes", tags=["Envelopes"], dependencies=_requires_auth)
 envelope_allocations_router = APIRouter(
-    prefix="/budget/envelope-allocations", tags=["Envelope Allocations"]
+    prefix="/budget/envelope-allocations", tags=["Envelope Allocations"], dependencies=_requires_auth
 )
-statements_router = APIRouter(prefix="/budget/statements", tags=["Statements"])
-transactions_router = APIRouter(prefix="/budget/transactions", tags=["Transactions"])
+statements_router = APIRouter(prefix="/budget/statements", tags=["Statements"], dependencies=_requires_auth)
+transactions_router = APIRouter(prefix="/budget/transactions", tags=["Transactions"], dependencies=_requires_auth)
 categorization_rules_router = APIRouter(
-    prefix="/budget/categorization-rules", tags=["Categorization Rules"]
+    prefix="/budget/categorization-rules", tags=["Categorization Rules"], dependencies=_requires_auth
 )
-forecast_router = APIRouter(prefix="/budget/forecast", tags=["Forecast"])
+forecast_router = APIRouter(prefix="/budget/forecast", tags=["Forecast"], dependencies=_requires_auth)
 auth_router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
 # ==============================================================================
 # Auth
 # ==============================================================================
-
-
-def _unauthorized(detail: str) -> HTTPException:
-    # RFC 6750: a 401 from a bearer-token API names the scheme, so a client
-    # can tell "log in again" apart from any other 401.
-    return HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail=detail,
-        headers={"WWW-Authenticate": "Bearer"},
-    )
 
 
 @auth_router.post(
@@ -91,7 +87,7 @@ async def login_v1(data: schemas.UserLogin, db: AsyncSession = Depends(get_db)):
     if user is None:
         # One message for "no such email" and "wrong password": telling them
         # apart would let anyone probe which addresses have an account.
-        raise _unauthorized("Invalid email or password")
+        raise unauthorized("Invalid email or password")
     return await repo.issue_token_pair(db, user.id)
 
 
@@ -107,7 +103,7 @@ async def refresh_v1(data: schemas.RefreshRequest, db: AsyncSession = Depends(ge
         # Unknown, expired, revoked and replayed all look the same from here:
         # a replay has already revoked the session, and saying so would only
         # tell a thief that the theft was noticed.
-        raise _unauthorized("Invalid refresh token")
+        raise unauthorized("Invalid refresh token")
     return pair
 
 

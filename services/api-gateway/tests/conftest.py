@@ -25,6 +25,8 @@ os.environ["STATEMENT_UPLOAD_DIR"] = str(
 
 import pytest_asyncio  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
+from app.core.deps import get_current_user_id  # noqa: E402
+from app.db.repositories.constants import SEED_USER_ID  # noqa: E402
 from app.db.session import get_db  # noqa: E402
 from app.main import app  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
@@ -63,7 +65,10 @@ async def db_session():
 
 
 @pytest_asyncio.fixture
-async def client(db_session):
+async def anon_client(db_session):
+    """A client with no authentication: requests carry whatever headers the test
+    gives them, and go through the real token check."""
+
     async def _override_get_db():
         yield db_session
 
@@ -72,3 +77,12 @@ async def client(db_session):
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
     app.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture
+async def client(anon_client):
+    """A client signed in as the seeded user, which every pre-auth test builds
+    its rows for. The token check itself is bypassed here; `test_auth_required.py`
+    covers it end to end."""
+    app.dependency_overrides[get_current_user_id] = lambda: SEED_USER_ID
+    yield anon_client
