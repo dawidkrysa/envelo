@@ -5,6 +5,7 @@ network or mutating anything - a stub stands in for the page.
 """
 
 import asyncio
+from datetime import date
 from types import SimpleNamespace
 
 import flet as ft
@@ -12,6 +13,7 @@ import pytest
 from flet.messaging.session_store import SessionStore
 
 import api_client
+import auth
 from currency import DEFAULT_CURRENCY, set_currency
 from preferences import DEFAULT_ALERT_THRESHOLD, set_alert_threshold, set_dark_mode
 from routing import VIEW_BUILDERS
@@ -2407,22 +2409,49 @@ async def test_the_notification_picker_does_not_offer_a_channel_that_does_not_ex
     assert [o.key for o in picker.options] == ["none"]
 
 
-async def test_settings_does_not_greet_a_user_that_does_not_exist():
+async def test_settings_never_invents_a_user():
     """The eyebrow read "Dawid Krysa · dawid@envelo.local" - a name and an
-    address that exist nowhere. There is no user entity behind the API."""
+    address that existed nowhere. Without a signed-in session there is still
+    nobody to name."""
     view = await VIEW_BUILDERS["/settings"](stub_page())
     texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
 
     assert not any("@" in t for t in texts)
+    assert not any("Dawid" in t for t in texts)
 
 
-async def test_sign_out_does_not_promise_a_password_prompt():
-    """There is no auth: the login screen accepts anything and this button only
-    navigates."""
-    view = await VIEW_BUILDERS["/settings"](stub_page())
+async def test_settings_and_nav_show_the_signed_in_email_and_nothing_else():
+    page = stub_page()
+    auth.store_tokens(page, {"access_token": "a", "refresh_token": "r"}, email="ola@example.com")
+
+    view = await VIEW_BUILDERS["/settings"](page)
     texts = [c.value or "" for c in walk(view) if isinstance(c, ft.Text)]
 
-    assert not any("password" in t.lower() for t in texts)
+    # Page eyebrow (rendered in caps, like every eyebrow) + nav footer.
+    assert [t.lower() for t in texts].count("ola@example.com") == 2
+    assert "O" in texts  # the footer's initial, not a hardcoded "DK"
+    assert not any("Dawid" in t or t == "DK" for t in texts)
+
+
+async def test_sign_out_ends_the_session_and_revokes_it(monkeypatch):
+    revoked = []
+
+    async def fake_logout(refresh_token):
+        revoked.append(refresh_token)
+
+    monkeypatch.setattr("views.settings.logout", fake_logout)
+    page = stub_page()
+    routes = []
+    page.navigate = routes.append
+    auth.store_tokens(page, {"access_token": "a", "refresh_token": "r-1"}, email="ola@example.com")
+
+    view = await VIEW_BUILDERS["/settings"](page)
+    sign_out = find_button(view, "Sign out")
+    await sign_out.on_click(SimpleNamespace(control=sign_out))
+
+    assert not auth.is_signed_in(page)
+    assert routes == ["/login"]
+    assert revoked == ["r-1"]
 
 
 async def test_saved_threshold_is_restored_before_anything_renders():
@@ -3683,3 +3712,165 @@ async def test_typing_fires_one_search_not_one_per_keystroke(monkeypatch):
     searched = [c for c in calls[before:] if c.get("search")]
     assert len(searched) == 1
     assert searched[0]["search"] == "Lidl"
+
+
+# --- First-run: a way back to the checklist ----------------------------------
+
+
+async def test_first_run_keeps_a_way_back_until_the_checklist_is_done(monkeypatch):
+    """Each step opens the real screen that does the job. Those screens had no
+    way back, so finishing step one stranded steps two and three."""
+    from views.common import SETUP_IN_PROGRESS_KEY
+
+    page = stub_page()
+    routes = []
+    page.navigate = routes.append
+    await VIEW_BUILDERS["/first-run"](page)  # nothing done yet
+    assert page.session.store.get(SETUP_IN_PROGRESS_KEY) is True
+
+    view = await VIEW_BUILDERS["/accounts"](page)
+    back = find_button(view, "Back to setup")
+    assert back is not None
+    back.on_click(SimpleNamespace(control=back))
+    assert routes == ["/first-run"]
+
+
+async def test_the_setup_bar_goes_once_every_step_is_done(monkeypatch):
+    from views.common import SETUP_IN_PROGRESS_KEY
+
+    async def one(*args, **kwargs):
+        return [{"id": "x", "month": date.today().replace(day=1).isoformat(), "assigned_amount": "10.00"}]
+
+    for name in ("get_accounts", "get_statements", "get_envelope_allocations"):
+        monkeypatch.setattr(f"views.first_run.{name}", one)
+    page = stub_page()
+    page.session.store.set(SETUP_IN_PROGRESS_KEY, True)
+
+    await VIEW_BUILDERS["/first-run"](page)
+
+    assert page.session.store.get(SETUP_IN_PROGRESS_KEY) is False
+    view = await VIEW_BUILDERS["/accounts"](page)
+    assert find_button(view, "Back to setup") is None
+
+
+async def test_an_outage_does_not_restart_a_finished_checklist(monkeypatch):
+    # Unreachable server -> every step looks undone. That must not bring the
+    # setup bar back for someone who finished long ago.
+    from views.common import SETUP_IN_PROGRESS_KEY
+
+    async def down(*args, **kwargs):
+        api_client._note_failure("accounts", RuntimeError("down"))
+        return []
+
+    monkeypatch.setattr("views.first_run.get_accounts", down)
+    page = stub_page()
+    page.session.store.set(SETUP_IN_PROGRESS_KEY, False)
+
+    await VIEW_BUILDERS["/first-run"](page)
+
+    assert page.session.store.get(SETUP_IN_PROGRESS_KEY) is False
+
+
+async def test_signing_out_forgets_everything_in_the_session(monkeypatch):
+    from views.common import SETUP_IN_PROGRESS_KEY
+
+    async def fake_logout(refresh_token):
+        return None
+
+    monkeypatch.setattr("views.settings.logout", fake_logout)
+    page = stub_page()
+    auth.store_tokens(page, {"access_token": "a", "refresh_token": "r"}, email="ola@example.com")
+    page.session.store.set(SETUP_IN_PROGRESS_KEY, True)
+    page.session.store.set("selected_envelope_id", "env-1")
+
+    view = await VIEW_BUILDERS["/settings"](page)
+    sign_out = find_button(view, "Sign out")
+    await sign_out.on_click(SimpleNamespace(control=sign_out))
+
+    assert page.session.store.get_keys() == []
+
+
+# --- Add envelope with no category groups yet --------------------------------
+
+
+async def _open_add_envelope(monkeypatch, groups):
+    async def fake_groups():
+        return groups
+
+    monkeypatch.setattr("views.common.get_category_groups", fake_groups)
+    monkeypatch.setattr("views.envelopes.get_to_assign", _async_zero)
+    page = stub_page()
+    view = await VIEW_BUILDERS["/envelopes"](page)
+    button = find_button(view, "Add envelope")
+    button.on_click(SimpleNamespace(control=button))
+    return page, page.opened_dialogs[0]
+
+
+async def _async_zero(*args, **kwargs):
+    return 0.0
+
+
+async def test_add_envelope_asks_for_a_first_group_instead_of_an_empty_picker(monkeypatch):
+    page, dialog = await _open_add_envelope(monkeypatch, [])
+
+    field = _dialog_field(dialog, "First category group")
+    assert isinstance(field, ft.TextField)
+    assert not any(isinstance(c, ft.Dropdown) for c in walk(dialog))
+    texts = [c.value or "" for c in walk(dialog) if isinstance(c, ft.Text)]
+    assert any("no category groups yet" in t for t in texts)
+
+
+async def test_add_envelope_creates_the_first_group_with_it(monkeypatch):
+    calls = []
+
+    async def fake_create_group(payload):
+        calls.append(("group", payload))
+        return {**payload, "id": "cg-new"}
+
+    async def fake_create_envelope(payload):
+        calls.append(("envelope", payload))
+        return {**payload, "id": "env-new"}
+
+    monkeypatch.setattr("api_client.create_category_group", fake_create_group)
+    monkeypatch.setattr("api_client.create_envelope", fake_create_envelope)
+    page, dialog = await _open_add_envelope(monkeypatch, [])
+
+    _dialog_field(dialog, "Name").value = "Groceries"
+    _dialog_field(dialog, "First category group").value = "Everyday"
+    await dialog.actions[1].on_click(SimpleNamespace(control=dialog.actions[1]))
+
+    assert calls == [
+        ("group", {"name": "Everyday", "sort_order": 0}),
+        ("envelope", {"category_group_id": "cg-new", "name": "Groceries", "target_amount": None}),
+    ]
+    assert page.opened_dialogs == []
+
+
+async def test_retrying_after_a_failed_envelope_does_not_duplicate_the_group(monkeypatch):
+    groups, envelopes = [], []
+
+    async def fake_create_group(payload):
+        groups.append(payload)
+        return {**payload, "id": "cg-new"}
+
+    async def flaky_create_envelope(payload):
+        envelopes.append(payload)
+        return None if len(envelopes) == 1 else {**payload, "id": "env-new"}
+
+    monkeypatch.setattr("api_client.create_category_group", fake_create_group)
+    monkeypatch.setattr("api_client.create_envelope", flaky_create_envelope)
+    page, dialog = await _open_add_envelope(monkeypatch, [])
+    _dialog_field(dialog, "Name").value = "Groceries"
+    _dialog_field(dialog, "First category group").value = "Everyday"
+    confirm = dialog.actions[1]
+
+    await confirm.on_click(SimpleNamespace(control=confirm))  # envelope fails
+    await confirm.on_click(SimpleNamespace(control=confirm))  # retry
+
+    assert len(groups) == 1
+    assert [e["category_group_id"] for e in envelopes] == ["cg-new", "cg-new"]
+
+
+async def test_add_envelope_with_groups_still_offers_the_picker(monkeypatch):
+    page, dialog = await _open_add_envelope(monkeypatch, [{"id": "cg-1", "name": "Everyday"}])
+    assert isinstance(_dialog_field(dialog, "Category group"), ft.Dropdown)

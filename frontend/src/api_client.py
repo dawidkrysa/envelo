@@ -17,6 +17,7 @@ from contextlib import contextmanager
 
 import httpx
 
+import auth
 from config import API_GATEWAY_URL
 
 # Which reads failed inside the innermost `collect_failures()` block, or None
@@ -52,7 +53,9 @@ def collect_failures():
 
 
 def _note_failure(endpoint: str, error: Exception) -> None:
-    if isinstance(error, httpx.HTTPStatusError) and error.response.status_code == 404:
+    # 401 is not an outage either: it means "sign in again", and `_request` has
+    # already sent the user to the login screen by the time a caller sees it.
+    if isinstance(error, httpx.HTTPStatusError) and error.response.status_code in (401, 404):
         return
     bucket = _failures.get()
     if bucket is not None:
@@ -86,9 +89,117 @@ def _client() -> httpx.AsyncClient:
     return client
 
 
+
+async def _send(method: str, url: str, token: str | None, **kwargs) -> httpx.Response:
+    if token is not None:
+        kwargs["headers"] = {**kwargs.get("headers", {}), "Authorization": f"Bearer {token}"}
+    return await getattr(_client(), method)(url, **kwargs)
+
+
+async def _request(method: str, url: str, **kwargs) -> httpx.Response:
+    """Every gateway call goes through here: it signs the request with the
+    session's access token and, when that has expired, refreshes it once and
+    retries.
+
+    The header is set per request, never on the shared client - see `auth.py`
+    for why. Network errors are left to propagate, so each caller's existing
+    `except httpx.HTTPError` keeps deciding what an outage looks like.
+    """
+    page = auth.current_page()
+    token = auth.access_token(page)
+    response = await _send(method, url, token, **kwargs)
+
+    if response.status_code == 401 and auth.is_signed_in(page) and await _refresh(page, token):
+        response = await _send(method, url, auth.access_token(page), **kwargs)
+    if response.status_code == 401 and page is not None:
+        _signed_out(page)
+    return response
+
+
+async def _refresh(page, stale_access_token: str | None) -> bool:
+    """Swap the refresh token for a new pair. True if there is a usable access
+    token afterwards.
+
+    Under the session's lock, and only if nobody else has refreshed meanwhile:
+    a screen's `asyncio.gather` makes several requests hit the expired token at
+    once, and a second refresh with the token the first just rotated would look
+    like theft to the server, which then revokes the whole session.
+    """
+    async with auth.refresh_lock(page):
+        current = auth.access_token(page)
+        if current != stale_access_token:
+            return current is not None
+        refresh_token = auth.refresh_token(page)
+        if refresh_token is None:
+            return False
+        response = await _client().post("/auth/refresh", json={"refresh_token": refresh_token})
+        if response.status_code != 200:
+            return False
+        auth.store_tokens(page, response.json())
+        return True
+
+
+def _signed_out(page) -> None:
+    """The session is over (refresh refused, or a fresh token still rejected):
+    forget it and go to the login screen - once, however many requests noticed."""
+    was_signed_in = auth.is_signed_in(page)
+    auth.clear(page)
+    if was_signed_in:
+        try:
+            page.navigate("/login")
+        except Exception:
+            pass
+
+
+def _auth_error(response: httpx.Response) -> str:
+    """A sentence for the login card, from a refused /auth/* request."""
+    if response.status_code == 409:
+        return "An account with this email already exists. Sign in instead."
+    if response.status_code == 422:
+        fields = {str(part) for error in response.json().get("detail", []) for part in error.get("loc", [])}
+        if "password" in fields:
+            return "Use a password of at least 12 characters."
+        return "That doesn't look like an email address."
+    if response.status_code == 401:
+        return "That email and password don't match."
+    return "Couldn't sign in - try again."
+
+
+async def _sign_in(path: str, email: str, password: str) -> dict | None:
+    try:
+        response = await _client().post(path, json={"email": email, "password": password})
+    except httpx.HTTPError:
+        return None
+    if response.status_code in (200, 201):
+        return response.json()
+    return {"error": _auth_error(response)}
+
+
+# POST /auth/login
+async def login(email: str, password: str) -> dict | None:
+    """The token pair, `{"error": <sentence>}` if the server refused, or `None`
+    if it could not be reached. Storing the pair is the caller's job."""
+    return await _sign_in("/auth/login", email, password)
+
+
+# POST /auth/register
+async def register(email: str, password: str) -> dict | None:
+    """Creates the account and signs it in - same return shape as `login`."""
+    return await _sign_in("/auth/register", email, password)
+
+
+# POST /auth/logout
+async def logout(refresh_token: str) -> None:
+    """Revoke the refresh token server-side. Best effort: signing out locally
+    must not depend on the server answering."""
+    try:
+        await _client().post("/auth/logout", json={"refresh_token": refresh_token})
+    except httpx.HTTPError:
+        pass
+
 async def get_health() -> bool:
     try:
-        response = await _client().get("/health")
+        response = await _request("get", "/health")
         response.raise_for_status()
         return response.status_code == 200
     except httpx.HTTPError:
@@ -97,7 +208,7 @@ async def get_health() -> bool:
 
 async def get_accounts() -> list[dict]:  # GET /budget/accounts
     try:
-        response = await _client().get("/budget/accounts")
+        response = await _request("get", "/budget/accounts")
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError as error:
@@ -114,7 +225,7 @@ async def get_account_balances() -> dict[str, dict]:
     and would understate any account with real history.
     """
     try:
-        response = await _client().get("/budget/accounts/balances")
+        response = await _request("get", "/budget/accounts/balances")
         response.raise_for_status()
         return {row["account_id"]: row for row in response.json()}
     except httpx.HTTPError as error:
@@ -125,7 +236,7 @@ async def get_account_balances() -> dict[str, dict]:
 # POST /budget/accounts
 async def create_account(payload: dict) -> dict | None:
     try:
-        response = await _client().post("/budget/accounts", json=payload)
+        response = await _request("post", "/budget/accounts", json=payload)
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError:
@@ -135,7 +246,7 @@ async def create_account(payload: dict) -> dict | None:
 # PUT /budget/accounts/{accountId}
 async def update_account(account_id: str, payload: dict) -> dict | None:
     try:
-        response = await _client().put(f"/budget/accounts/{account_id}", json=payload)
+        response = await _request("put", f"/budget/accounts/{account_id}", json=payload)
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError:
@@ -145,7 +256,7 @@ async def update_account(account_id: str, payload: dict) -> dict | None:
 # GET /budget/payees
 async def get_payees() -> list[dict]:
     try:
-        response = await _client().get("/budget/payees")
+        response = await _request("get", "/budget/payees")
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError as error:
@@ -156,7 +267,7 @@ async def get_payees() -> list[dict]:
 # GET /budget/envelopes
 async def get_envelopes() -> list[dict]:
     try:
-        response = await _client().get("/budget/envelopes")
+        response = await _request("get", "/budget/envelopes")
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError as error:
@@ -207,7 +318,7 @@ async def get_transactions_page(
     params["skip"] = skip
     params["limit"] = limit
     try:
-        response = await _client().get("/budget/transactions", params=params)
+        response = await _request("get", "/budget/transactions", params=params)
         response.raise_for_status()
         rows = response.json()
         return rows, int(response.headers.get("X-Total-Count", len(rows)))
@@ -234,7 +345,7 @@ async def get_transactions(
         params["dateTo"] = date_to
 
     try:
-        response = await _client().get("/budget/transactions", params=params)
+        response = await _request("get", "/budget/transactions", params=params)
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError as error:
@@ -257,7 +368,7 @@ async def get_spent_by_envelope(*, date_from=None, date_to=None) -> dict[str, fl
     if date_to is not None:
         params["dateTo"] = date_to
     try:
-        response = await _client().get("/budget/transactions/spent-by-envelope", params=params)
+        response = await _request("get", "/budget/transactions/spent-by-envelope", params=params)
         response.raise_for_status()
         return {row["envelope_id"]: float(row["spent"]) for row in response.json()}
     except httpx.HTTPError as error:
@@ -268,7 +379,7 @@ async def get_spent_by_envelope(*, date_from=None, date_to=None) -> dict[str, fl
 # POST /budget/transactions
 async def create_transaction(payload: dict) -> dict | None:
     try:
-        response = await _client().post("/budget/transactions", json=payload)
+        response = await _request("post", "/budget/transactions", json=payload)
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError:
@@ -285,7 +396,7 @@ async def get_payee_stats() -> dict[str, dict]:
     reported short.
     """
     try:
-        response = await _client().get("/budget/payees/stats")
+        response = await _request("get", "/budget/payees/stats")
         response.raise_for_status()
         return {row["payee_id"]: row for row in response.json()}
     except httpx.HTTPError as error:
@@ -296,7 +407,7 @@ async def get_payee_stats() -> dict[str, dict]:
 # PUT /budget/payees/{payeeId}
 async def update_payee(payee_id: str, payload: dict) -> dict | None:
     try:
-        response = await _client().put(f"/budget/payees/{payee_id}", json=payload)
+        response = await _request("put", f"/budget/payees/{payee_id}", json=payload)
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError:
@@ -308,7 +419,7 @@ async def merge_payees(from_payee_id: str, into_payee_id: str) -> dict | None:
     """Folds one payee into another, moving its transactions across. Returns the
     surviving payee, or `None` on failure."""
     try:
-        response = await _client().post(
+        response = await _request("post", 
             "/budget/payees/merge",
             json={"from_payee_id": from_payee_id, "into_payee_id": into_payee_id},
         )
@@ -321,7 +432,7 @@ async def merge_payees(from_payee_id: str, into_payee_id: str) -> dict | None:
 # POST /budget/payees
 async def create_payee(name: str) -> dict | None:
     try:
-        response = await _client().post("/budget/payees", json={"name": name})
+        response = await _request("post", "/budget/payees", json={"name": name})
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError:
@@ -338,7 +449,7 @@ async def get_categorization_rules() -> list[dict]:
     nothing to the server.
     """
     try:
-        response = await _client().get("/budget/categorization-rules")
+        response = await _request("get", "/budget/categorization-rules")
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError as error:
@@ -349,7 +460,7 @@ async def get_categorization_rules() -> list[dict]:
 # POST /budget/categorization-rules
 async def create_categorization_rule(payload: dict) -> dict | None:
     try:
-        response = await _client().post("/budget/categorization-rules", json=payload)
+        response = await _request("post", "/budget/categorization-rules", json=payload)
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError:
@@ -359,7 +470,7 @@ async def create_categorization_rule(payload: dict) -> dict | None:
 # PUT /budget/categorization-rules/{categorizationRuleId}
 async def update_categorization_rule(rule_id: str, payload: dict) -> dict | None:
     try:
-        response = await _client().put(f"/budget/categorization-rules/{rule_id}", json=payload)
+        response = await _request("put", f"/budget/categorization-rules/{rule_id}", json=payload)
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError:
@@ -369,7 +480,7 @@ async def update_categorization_rule(rule_id: str, payload: dict) -> dict | None
 # DELETE /budget/categorization-rules/{categorizationRuleId}
 async def delete_categorization_rule(rule_id: str) -> dict | None:
     try:
-        response = await _client().delete(f"/budget/categorization-rules/{rule_id}")
+        response = await _request("delete", f"/budget/categorization-rules/{rule_id}")
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError:
@@ -384,7 +495,7 @@ async def get_statements(account_id=None) -> list[dict]:
     if account_id is not None:
         params["accountId"] = account_id
     try:
-        response = await _client().get("/budget/statements", params=params)
+        response = await _request("get", "/budget/statements", params=params)
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError as error:
@@ -395,7 +506,7 @@ async def get_statements(account_id=None) -> list[dict]:
 # GET /budget/category-groups
 async def get_category_groups() -> list[dict]:
     try:
-        response = await _client().get("/budget/category-groups")
+        response = await _request("get", "/budget/category-groups")
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError as error:
@@ -409,7 +520,7 @@ async def get_envelope_allocations(envelope_id=None) -> list[dict]:
     if envelope_id is not None:
         params["envelopeId"] = envelope_id
     try:
-        response = await _client().get("/budget/envelope-allocations", params=params)
+        response = await _request("get", "/budget/envelope-allocations", params=params)
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError as error:
@@ -420,7 +531,7 @@ async def get_envelope_allocations(envelope_id=None) -> list[dict]:
 # POST /budget/envelope-allocations
 async def create_envelope_allocation(payload=None) -> dict | None:
     try:
-        response = await _client().post("/budget/envelope-allocations", json=payload)
+        response = await _request("post", "/budget/envelope-allocations", json=payload)
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError:
@@ -430,7 +541,7 @@ async def create_envelope_allocation(payload=None) -> dict | None:
 # PUT /budget/envelope-allocations/{allocationId}
 async def update_envelope_allocation(allocation_id=None, payload=None) -> dict | None:
     try:
-        response = await _client().put(f"/budget/envelope-allocations/{allocation_id}", json=payload)
+        response = await _request("put", f"/budget/envelope-allocations/{allocation_id}", json=payload)
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError:
@@ -440,7 +551,7 @@ async def update_envelope_allocation(allocation_id=None, payload=None) -> dict |
 # GET /budget/envelope-allocations/to-assign
 async def get_to_assign() -> float:
     try:
-        response = await _client().get("/budget/envelope-allocations/to-assign")
+        response = await _request("get", "/budget/envelope-allocations/to-assign")
         response.raise_for_status()
         return float(response.json()["to_assign"])
     except httpx.HTTPError as error:
@@ -468,7 +579,7 @@ async def get_forecast(month=None, as_of=None) -> dict:
     if as_of is not None:
         params["asOf"] = as_of
     try:
-        response = await _client().get("/budget/forecast", params=params)
+        response = await _request("get", "/budget/forecast", params=params)
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError as error:
@@ -479,7 +590,7 @@ async def get_forecast(month=None, as_of=None) -> dict:
 # POST /budget/envelopes
 async def create_envelope(payload: dict) -> dict | None:
     try:
-        response = await _client().post("/budget/envelopes", json=payload)
+        response = await _request("post", "/budget/envelopes", json=payload)
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError:
@@ -489,7 +600,7 @@ async def create_envelope(payload: dict) -> dict | None:
 # PUT /budget/envelopes/{envelopeId}
 async def update_envelope(envelope_id: str, payload: dict) -> dict | None:
     try:
-        response = await _client().put(f"/budget/envelopes/{envelope_id}", json=payload)
+        response = await _request("put", f"/budget/envelopes/{envelope_id}", json=payload)
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError:
@@ -499,7 +610,7 @@ async def update_envelope(envelope_id: str, payload: dict) -> dict | None:
 # POST /budget/category-groups
 async def create_category_group(payload: dict) -> dict | None:
     try:
-        response = await _client().post("/budget/category-groups", json=payload)
+        response = await _request("post", "/budget/category-groups", json=payload)
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError:
@@ -509,7 +620,7 @@ async def create_category_group(payload: dict) -> dict | None:
 # POST /budget/envelope-allocations/transfer
 async def transfer_envelope_allocation(payload: dict) -> list[dict] | None:
     try:
-        response = await _client().post("/budget/envelope-allocations/transfer", json=payload)
+        response = await _request("post", "/budget/envelope-allocations/transfer", json=payload)
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError:
@@ -527,7 +638,7 @@ async def delete_envelope(envelope_id: str) -> dict | None:
     is still the server's to make and swallowing its reason would be worse than
     showing it."""
     try:
-        response = await _client().delete(f"/budget/envelopes/{envelope_id}")
+        response = await _request("delete", f"/budget/envelopes/{envelope_id}")
         response.raise_for_status()
         return response.json()
     except httpx.HTTPStatusError as e:
@@ -541,7 +652,7 @@ async def delete_envelope(envelope_id: str) -> dict | None:
 # PUT /budget/category-groups/{categoryGroupId}
 async def update_category_group(category_group_id: str, payload: dict) -> dict | None:
     try:
-        response = await _client().put(f"/budget/category-groups/{category_group_id}", json=payload)
+        response = await _request("put", f"/budget/category-groups/{category_group_id}", json=payload)
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError:
@@ -555,7 +666,7 @@ async def delete_category_group(category_group_id: str) -> dict | None:
     `app/db/repositories/category_group.py`), or `None` for any other
     failure."""
     try:
-        response = await _client().delete(f"/budget/category-groups/{category_group_id}")
+        response = await _request("delete", f"/budget/category-groups/{category_group_id}")
         response.raise_for_status()
         return response.json()
     except httpx.HTTPStatusError as e:
@@ -576,7 +687,7 @@ async def create_statement(account_id: str, filename: str, content: bytes) -> di
     backend's `detail` already says which), or `None` on a genuine network
     failure, where there is no server response to read a reason from."""
     try:
-        response = await _client().post(
+        response = await _request("post", 
             "/budget/statements/upload",
             data={"account_id": account_id},
             files={"file": (filename, content, "text/csv")},

@@ -8,6 +8,8 @@ channel it used to offer named something that does not exist.
 
 import flet as ft
 
+import auth
+from api_client import logout
 from components.button import danger_button
 from components.card import flat_card
 from components.page_header import page_header
@@ -32,6 +34,15 @@ async def build_settings_view(page: ft.Page) -> ft.View:
     p = palette(page)
 
     threshold_value = ft.Text(f"{alert_threshold()}%", style=text_style(16, 600, p.warn_ink))
+
+    async def sign_out(e: ft.ControlEvent) -> None:
+        # Local state is cleared first and unconditionally: if the server is
+        # unreachable the revoke is lost, but this tab must still be signed out.
+        refresh_token = auth.refresh_token(page)
+        auth.clear(page)
+        page.navigate("/login")
+        if refresh_token is not None:
+            await logout(refresh_token)
 
     def on_threshold(e: ft.ControlEvent) -> None:
         """Label only, while the handle is moving. The value is not committed
@@ -181,17 +192,18 @@ async def build_settings_view(page: ft.Page) -> ft.View:
                     ft.Column(
                         [
                             ft.Text("Sign out", style=text_style(14, 600, p.ink)),
-                            # Was "You will need your email and password to get
-                            # back in." There is no auth: the login screen
-                            # accepts anything and this button only navigates.
-                            # Promising a password prompt that never comes is
-                            # the kind of claim someone plans around.
-                            ft.Text("Returns you to the sign-in screen.", style=text_style(12.5, 400, p.ink3)),
+                            # True now that sign-in is real: the session is
+                            # revoked server-side, so getting back in takes the
+                            # password again.
+                            ft.Text(
+                                "Ends this session. You will need your password to get back in.",
+                                style=text_style(12.5, 400, p.ink3),
+                            ),
                         ],
                         spacing=3,
                         tight=True,
                     ),
-                    danger_button(p, "Sign out", lambda e: page.navigate("/login")),
+                    danger_button(p, "Sign out", sign_out),
                 ],
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             ),
@@ -202,10 +214,9 @@ async def build_settings_view(page: ft.Page) -> ft.View:
 
     body: list[ft.Control] = [
         # Was "Dawid Krysa · dawid@envelo.local" - a name and an address that
-        # exist nowhere. There is no user entity behind the API (the gateway
-        # hardcodes a single owner), so there is nobody to greet by name; the
-        # same reason the Dashboard stopped saying "Hello".
-        page_header(p, "Settings", eyebrow_segments=["This device"]),
+        # existed nowhere. Now it is the address this session actually signed
+        # in with, and nothing else: there is still no name on the account.
+        page_header(p, "Settings", eyebrow_segments=[auth.signed_in_email(page) or "This device"]),
         ft.Column([threshold_card, *rows], spacing=11, width=660),
     ]
 

@@ -28,7 +28,7 @@ from components.notice import notice_banner
 from components.page_header import page_header
 from theme import palette, text_style
 from utils import range_to_dates
-from views.common import standalone_shell
+from views.common import SETUP_IN_PROGRESS_KEY, standalone_shell
 
 
 @dataclass(frozen=True)
@@ -118,6 +118,12 @@ async def build_first_run_view(page: ft.Page) -> ft.View:
     # finished ones - the mock gave *those* the primary button, so the screen
     # shouted loudest about what you had already done.
     next_step = next((i for i, step in enumerate(steps) if not step.done), None)
+    # Decided here, from the API's answer, every time this screen is shown - so
+    # the "Back to setup" bar disappears by itself once the last step is done.
+    # Left alone when the server could not be reached: an outage makes every
+    # step look undone, and that must not resurrect a finished checklist.
+    if not failures:
+        page.session.store.set(SETUP_IN_PROGRESS_KEY, next_step is not None)
 
     rows: list[ft.Control] = []
     for i, step in enumerate(steps):

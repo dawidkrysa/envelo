@@ -208,6 +208,16 @@ def new_envelope_dialog(
     close = _close(page)
     group_options = [(cg["id"], cg["name"]) for cg in (category_groups or [])]
     error_text = ft.Text("", style=text_style(12, 500, p.over_ink))
+    # With no groups yet the picker would open onto nothing, and nothing said
+    # why - an envelope needs a group, and a new budget has none. Ask for the
+    # first group's name right here instead, and create it with the envelope:
+    # sending someone off to find "Add category group" first is a detour for a
+    # question that has exactly one sensible answer.
+    needs_first_group = envelope is None and not group_options
+    group_label = "First category group" if needs_first_group else "Category group"
+    # The group made on an earlier attempt, if the envelope itself then failed:
+    # retrying must not create a second group with the same name.
+    created_group: dict = {}
 
     target_value = ""
     if envelope and envelope.get("target_amount") is not None:
@@ -222,14 +232,31 @@ def new_envelope_dialog(
             page.update()
             return
 
-        category_group_id = controls["Category group"].value
-        if not category_group_id:
-            error_text.value = "Pick a category group."
-            page.update()
-            return
+        if needs_first_group:
+            group_name = controls[group_label].value.strip()
+            if not group_name:
+                error_text.value = "Name the group this envelope belongs to."
+                page.update()
+                return
+        else:
+            category_group_id = controls[group_label].value
+            if not category_group_id:
+                error_text.value = "Pick a category group."
+                page.update()
+                return
 
         target_raw = controls["Monthly target (optional)"].value
         target_amount = parse_amount(target_raw) if target_raw else None
+
+        if needs_first_group:
+            if "id" not in created_group:
+                group = await api_client.create_category_group({"name": group_name, "sort_order": 0})
+                if group is None:
+                    error_text.value = "Couldn't create the group — try again."
+                    page.update()
+                    return
+                created_group.update(group)
+            category_group_id = created_group["id"]
 
         payload = {"category_group_id": category_group_id, "name": name, "target_amount": target_amount}
         if envelope is not None:
@@ -252,11 +279,20 @@ def new_envelope_dialog(
         subtitle="Envelopes hold the money you plan to spend on one thing.",
         fields=[
             ModalField("Name", "input", placeholder="e.g. Pharmacy", value=envelope["name"] if envelope else ""),
-            ModalField(
-                "Category group",
-                "select",
-                options=group_options,
-                value=envelope["category_group_id"] if envelope else (default_category_group_id or ""),
+            (
+                ModalField(
+                    group_label,
+                    "input",
+                    placeholder="e.g. Everyday",
+                    hint="You have no category groups yet. This one is created along with the envelope.",
+                )
+                if needs_first_group
+                else ModalField(
+                    group_label,
+                    "select",
+                    options=group_options,
+                    value=envelope["category_group_id"] if envelope else (default_category_group_id or ""),
+                )
             ),
             ModalField(
                 "Monthly target (optional)",

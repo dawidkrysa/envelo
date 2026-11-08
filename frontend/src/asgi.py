@@ -8,6 +8,7 @@ needs to be able to `import asgi:app`.
 
 import flet as ft
 
+from config import WEB_RENDERER
 from main import ASSETS_DIR, main
 
-app = ft.run(main, assets_dir=ASSETS_DIR, export_asgi_app=True)
+app = ft.run(main, assets_dir=ASSETS_DIR, export_asgi_app=True, web_renderer=ft.WebRenderer(WEB_RENDERER))
