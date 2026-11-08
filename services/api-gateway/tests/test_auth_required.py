@@ -12,10 +12,10 @@ import jwt
 import pytest
 from app.core.config import get_settings
 from app.core.security import ALGORITHM, AUDIENCE, ISSUER, create_access_token
-from app.db.repositories.constants import SEED_USER_ID
 from app.main import app
 from fastapi.routing import APIRoute
 
+SEEDED_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")  # infra/postgres/seed/seed_data.sql
 PROTECTED_PROBE = "/budget/transactions"  # answers [] rather than 404 when empty
 
 
@@ -24,7 +24,7 @@ def _token(**overrides) -> str:
     by passing None) - so each test breaks exactly one thing about it."""
     now = datetime.now(timezone.utc)
     claims = {
-        "sub": str(SEED_USER_ID),
+        "sub": str(SEEDED_USER_ID),
         "iat": now,
         "exp": now + timedelta(minutes=5),
         "aud": AUDIENCE,
@@ -72,7 +72,7 @@ async def test_public_routes_stay_public(anon_client):
 
 
 async def test_a_valid_token_is_accepted(anon_client):
-    response = await anon_client.get(PROTECTED_PROBE, headers=_bearer(create_access_token(SEED_USER_ID)))
+    response = await anon_client.get(PROTECTED_PROBE, headers=_bearer(create_access_token(SEEDED_USER_ID)))
     assert response.status_code == 200
 
 
@@ -103,7 +103,7 @@ async def test_wrong_scheme_is_rejected(anon_client):
         pytest.param(_token(sub="not-a-uuid"), id="subject-not-a-uuid"),
         pytest.param(
             jwt.encode(
-                {"sub": str(SEED_USER_ID), "aud": AUDIENCE, "iss": ISSUER, "iat": 0, "exp": 4102444800},
+                {"sub": str(SEEDED_USER_ID), "aud": AUDIENCE, "iss": ISSUER, "iat": 0, "exp": 4102444800},
                 "a-different-secret-of-sufficient-length!",
                 algorithm=ALGORITHM,
             ),

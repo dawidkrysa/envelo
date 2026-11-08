@@ -133,9 +133,9 @@ async def logout_v1(data: schemas.RefreshRequest, db: AsyncSession = Depends(get
     response_model=schemas.AccountRead,
 )
 async def create_account_v1(
-    data: schemas.AccountCreate, db: AsyncSession = Depends(get_db)
+    data: schemas.AccountCreate, db: AsyncSession = Depends(get_db), user_id: uuid.UUID = Depends(get_current_user_id)
 ):
-    return await repo.create_account(db, data)
+    return await repo.create_account(db, user_id, data)
 
 
 # Read
@@ -146,9 +146,12 @@ async def create_account_v1(
     response_model=list[schemas.AccountRead],
 )
 async def get_accounts_v1(
-    skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)
+    skip: int = 0,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    return await repo.get_accounts(db, skip, limit)
+    return await repo.get_accounts(db, user_id, skip, limit)
 
 
 # Read - aggregate.
@@ -163,14 +166,16 @@ async def get_accounts_v1(
     status_code=status.HTTP_200_OK,
     response_model=list[schemas.AccountBalanceRead],
 )
-async def get_account_balances_v1(db: AsyncSession = Depends(get_db)):
+async def get_account_balances_v1(
+    db: AsyncSession = Depends(get_db), user_id: uuid.UUID = Depends(get_current_user_id)
+):
     """Every account's standing, including accounts nothing has touched yet.
 
     An empty list when there are no accounts at all - not the 404 the account
     *list* endpoint raises. "You have no accounts" is a real answer to "how do
     your accounts stand".
     """
-    return await repo.get_account_balances(db)
+    return await repo.get_account_balances(db, user_id)
 
 
 # Update
@@ -184,8 +189,9 @@ async def update_account_v1(
     data: schemas.AccountUpdate,
     accountId: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    return await repo.update_account(db, accountId, data)
+    return await repo.update_account(db, user_id, accountId, data)
 
 
 # Delete
@@ -195,8 +201,10 @@ async def update_account_v1(
     status_code=status.HTTP_200_OK,
     response_model=schemas.AccountDelete,
 )
-async def delete_account_v1(accountId: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    return await repo.delete_account(db, accountId)
+async def delete_account_v1(
+    accountId: uuid.UUID, db: AsyncSession = Depends(get_db), user_id: uuid.UUID = Depends(get_current_user_id)
+):
+    return await repo.delete_account(db, user_id, accountId)
 
 
 # ==============================================================================
@@ -212,9 +220,9 @@ async def delete_account_v1(accountId: uuid.UUID, db: AsyncSession = Depends(get
     response_model=schemas.PayeeRead,
 )
 async def create_payee_v1(
-    data: schemas.PayeeCreate, db: AsyncSession = Depends(get_db)
+    data: schemas.PayeeCreate, db: AsyncSession = Depends(get_db), user_id: uuid.UUID = Depends(get_current_user_id)
 ):
-    return await repo.create_payee(db, data)
+    return await repo.create_payee(db, user_id, data)
 
 
 # Read
@@ -225,9 +233,12 @@ async def create_payee_v1(
     response_model=list[schemas.PayeeRead],
 )
 async def get_payee_v1(
-    skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)
+    skip: int = 0,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    return await repo.get_payees(db, skip, limit)
+    return await repo.get_payees(db, user_id, skip, limit)
 
 
 # Read - aggregate.
@@ -240,13 +251,13 @@ async def get_payee_v1(
     status_code=status.HTTP_200_OK,
     response_model=list[schemas.PayeeStatsRead],
 )
-async def get_payee_stats_v1(db: AsyncSession = Depends(get_db)):
+async def get_payee_stats_v1(db: AsyncSession = Depends(get_db), user_id: uuid.UUID = Depends(get_current_user_id)):
     """Every payee's history, including payees nothing has been spent on.
 
     An empty list when there are no payees at all, not the 404 the payee *list*
     endpoint raises.
     """
-    return await repo.get_payee_stats(db)
+    return await repo.get_payee_stats(db, user_id)
 
 
 # Fold one payee into another, moving its transactions across
@@ -256,11 +267,13 @@ async def get_payee_stats_v1(db: AsyncSession = Depends(get_db)):
     status_code=status.HTTP_200_OK,
     response_model=schemas.PayeeRead,
 )
-async def merge_payees_v1(data: schemas.PayeeMerge, db: AsyncSession = Depends(get_db)):
+async def merge_payees_v1(
+    data: schemas.PayeeMerge, db: AsyncSession = Depends(get_db), user_id: uuid.UUID = Depends(get_current_user_id)
+):
     """Imports create a payee per spelling, so one shop arrives as several and
     the history that drives categorization is split between them. Returns the
     surviving payee."""
-    return await repo.merge_payees(db, data)
+    return await repo.merge_payees(db, user_id, data)
 
 
 # Update
@@ -271,9 +284,12 @@ async def merge_payees_v1(data: schemas.PayeeMerge, db: AsyncSession = Depends(g
     response_model=schemas.PayeeRead,
 )
 async def update_payee_v1(
-    data: schemas.PayeeUpdate, payeeId: uuid.UUID, db: AsyncSession = Depends(get_db)
+    data: schemas.PayeeUpdate,
+    payeeId: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    return await repo.update_payee(db, payeeId, data)
+    return await repo.update_payee(db, user_id, payeeId, data)
 
 
 # Delete
@@ -283,8 +299,10 @@ async def update_payee_v1(
     status_code=status.HTTP_200_OK,
     response_model=schemas.PayeeDelete,
 )
-async def delete_payee_v1(payeeId: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    return await repo.delete_payee(db, payeeId)
+async def delete_payee_v1(
+    payeeId: uuid.UUID, db: AsyncSession = Depends(get_db), user_id: uuid.UUID = Depends(get_current_user_id)
+):
+    return await repo.delete_payee(db, user_id, payeeId)
 
 
 # ==============================================================================
@@ -300,9 +318,11 @@ async def delete_payee_v1(payeeId: uuid.UUID, db: AsyncSession = Depends(get_db)
     response_model=schemas.CategoryGroupRead,
 )
 async def create_category_group_v1(
-    data: schemas.CategoryGroupCreate, db: AsyncSession = Depends(get_db)
+    data: schemas.CategoryGroupCreate,
+    db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    return await repo.create_category_group(db, data)
+    return await repo.create_category_group(db, user_id, data)
 
 
 # Read
@@ -313,9 +333,12 @@ async def create_category_group_v1(
     response_model=list[schemas.CategoryGroupRead],
 )
 async def get_category_groups_v1(
-    skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)
+    skip: int = 0,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    return await repo.get_category_groups(db, skip, limit)
+    return await repo.get_category_groups(db, user_id, skip, limit)
 
 
 # Update
@@ -329,8 +352,9 @@ async def update_category_group_v1(
     data: schemas.CategoryGroupUpdate,
     categoryGroupId: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    return await repo.update_category_group(db, categoryGroupId, data)
+    return await repo.update_category_group(db, user_id, categoryGroupId, data)
 
 
 # Delete
@@ -341,9 +365,9 @@ async def update_category_group_v1(
     response_model=schemas.CategoryGroupDelete,
 )
 async def delete_category_group_v1(
-    categoryGroupId: uuid.UUID, db: AsyncSession = Depends(get_db)
+    categoryGroupId: uuid.UUID, db: AsyncSession = Depends(get_db), user_id: uuid.UUID = Depends(get_current_user_id)
 ):
-    return await repo.delete_category_group(db, categoryGroupId)
+    return await repo.delete_category_group(db, user_id, categoryGroupId)
 
 
 # ==============================================================================
@@ -359,9 +383,9 @@ async def delete_category_group_v1(
     response_model=schemas.EnvelopeRead,
 )
 async def create_envelope_v1(
-    data: schemas.EnvelopeCreate, db: AsyncSession = Depends(get_db)
+    data: schemas.EnvelopeCreate, db: AsyncSession = Depends(get_db), user_id: uuid.UUID = Depends(get_current_user_id)
 ):
-    return await repo.create_envelope(db, data)
+    return await repo.create_envelope(db, user_id, data)
 
 
 # Read
@@ -372,9 +396,11 @@ async def create_envelope_v1(
     response_model=list[schemas.EnvelopeRead],
 )
 async def get_envelopes_v1(
-    categoryGroupId: uuid.UUID | None = None, db: AsyncSession = Depends(get_db)
+    categoryGroupId: uuid.UUID | None = None,
+    db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    return await repo.get_envelopes(db, categoryGroupId)
+    return await repo.get_envelopes(db, user_id, categoryGroupId)
 
 
 # Update
@@ -388,8 +414,9 @@ async def update_envelope_v1(
     data: schemas.EnvelopeUpdate,
     envelopeId: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    return await repo.update_envelope(db, envelopeId, data)
+    return await repo.update_envelope(db, user_id, envelopeId, data)
 
 
 # Delete
@@ -399,8 +426,10 @@ async def update_envelope_v1(
     status_code=status.HTTP_200_OK,
     response_model=schemas.EnvelopeDelete,
 )
-async def delete_envelope_v1(envelopeId: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    return await repo.delete_envelope(db, envelopeId)
+async def delete_envelope_v1(
+    envelopeId: uuid.UUID, db: AsyncSession = Depends(get_db), user_id: uuid.UUID = Depends(get_current_user_id)
+):
+    return await repo.delete_envelope(db, user_id, envelopeId)
 
 
 # ==============================================================================
@@ -416,9 +445,11 @@ async def delete_envelope_v1(envelopeId: uuid.UUID, db: AsyncSession = Depends(g
     response_model=schemas.EnvelopeAllocationRead,
 )
 async def create_envelope_allocation_v1(
-    data: schemas.EnvelopeAllocationCreate, db: AsyncSession = Depends(get_db)
+    data: schemas.EnvelopeAllocationCreate,
+    db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    return await repo.create_envelope_allocation(db, data)
+    return await repo.create_envelope_allocation(db, user_id, data)
 
 
 # Read
@@ -429,9 +460,11 @@ async def create_envelope_allocation_v1(
     response_model=list[schemas.EnvelopeAllocationRead],
 )
 async def get_envelope_allocations_v1(
-    envelopeId: uuid.UUID | None = None, db: AsyncSession = Depends(get_db)
+    envelopeId: uuid.UUID | None = None,
+    db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    return await repo.get_envelope_allocations(db, envelopeId)
+    return await repo.get_envelope_allocations(db, user_id, envelopeId)
 
 
 # Total unassigned money across all accounts ("Ready to Assign")
@@ -441,8 +474,8 @@ async def get_envelope_allocations_v1(
     status_code=status.HTTP_200_OK,
     response_model=schemas.ToAssignRead,
 )
-async def get_to_assign_v1(db: AsyncSession = Depends(get_db)):
-    return schemas.ToAssignRead(to_assign=await repo.get_to_assign(db))
+async def get_to_assign_v1(db: AsyncSession = Depends(get_db), user_id: uuid.UUID = Depends(get_current_user_id)):
+    return schemas.ToAssignRead(to_assign=await repo.get_to_assign(db, user_id))
 
 
 # Update
@@ -456,8 +489,9 @@ async def update_envelope_allocation_v1(
     data: schemas.EnvelopeAllocationUpdate,
     envelopeAllocationId: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    return await repo.update_envelope_allocation(db, envelopeAllocationId, data)
+    return await repo.update_envelope_allocation(db, user_id, envelopeAllocationId, data)
 
 
 # Move money between two envelope allocations (same month) in one atomic operation
@@ -468,9 +502,11 @@ async def update_envelope_allocation_v1(
     response_model=list[schemas.EnvelopeAllocationRead],
 )
 async def transfer_envelope_allocation_v1(
-    data: schemas.EnvelopeAllocationTransfer, db: AsyncSession = Depends(get_db)
+    data: schemas.EnvelopeAllocationTransfer,
+    db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    return await repo.transfer_envelope_allocation(db, data)
+    return await repo.transfer_envelope_allocation(db, user_id, data)
 
 
 # ==============================================================================
@@ -486,9 +522,11 @@ async def transfer_envelope_allocation_v1(
     response_model=schemas.CategorizationRuleRead,
 )
 async def create_categorization_rule_v1(
-    data: schemas.CategorizationRuleCreate, db: AsyncSession = Depends(get_db)
+    data: schemas.CategorizationRuleCreate,
+    db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    return await repo.create_categorization_rule(db, data)
+    return await repo.create_categorization_rule(db, user_id, data)
 
 
 # Read
@@ -499,9 +537,12 @@ async def create_categorization_rule_v1(
     response_model=list[schemas.CategorizationRuleRead],
 )
 async def get_categorization_rules_v1(
-    skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)
+    skip: int = 0,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    return await repo.get_categorization_rules(db, skip, limit)
+    return await repo.get_categorization_rules(db, user_id, skip, limit)
 
 
 # Update
@@ -515,8 +556,9 @@ async def update_categorization_rule_v1(
     data: schemas.CategorizationRuleUpdate,
     categorizationRuleId: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    return await repo.update_categorization_rule(db, categorizationRuleId, data)
+    return await repo.update_categorization_rule(db, user_id, categorizationRuleId, data)
 
 
 # Delete
@@ -527,9 +569,11 @@ async def update_categorization_rule_v1(
     response_model=schemas.CategorizationRuleDelete,
 )
 async def delete_categorization_rule_v1(
-    categorizationRuleId: uuid.UUID, db: AsyncSession = Depends(get_db)
+    categorizationRuleId: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    return await repo.delete_categorization_rule(db, categorizationRuleId)
+    return await repo.delete_categorization_rule(db, user_id, categorizationRuleId)
 
 
 # ==============================================================================
@@ -547,6 +591,7 @@ async def get_forecast_v1(
     month: date | None = None,
     asOf: date | None = None,
     db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
     """Where the month lands if spending carries on as it has.
 
@@ -560,7 +605,7 @@ async def get_forecast_v1(
     the entity lists, "you have no envelopes" is a real answer to "how will this
     month go", not a missing resource.
     """
-    return await repo.get_forecast(db, month, asOf)
+    return await repo.get_forecast(db, user_id, month, asOf)
 
 
 # ==============================================================================
@@ -578,8 +623,9 @@ async def get_forecast_v1(
 async def create_statement_v1(
     data: Annotated[schemas.StatementCreate, Form()],
     db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    return await repo.create_statement(db, data)
+    return await repo.create_statement(db, user_id, data)
 
 
 # Read
@@ -590,9 +636,11 @@ async def create_statement_v1(
     response_model=list[schemas.StatementRead],
 )
 async def get_statements_v1(
-    accountId: uuid.UUID | None = None, db: AsyncSession = Depends(get_db)
+    accountId: uuid.UUID | None = None,
+    db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    return await repo.get_statements(db, accountId)
+    return await repo.get_statements(db, user_id, accountId)
 
 
 # Update
@@ -606,8 +654,9 @@ async def update_statement_v1(
     data: schemas.StatementUpdate,
     statementId: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    return await repo.update_statement(db, statementId, data)
+    return await repo.update_statement(db, user_id, statementId, data)
 
 
 # Delete
@@ -618,9 +667,9 @@ async def update_statement_v1(
     response_model=schemas.StatementDelete,
 )
 async def delete_statement_v1(
-    statementId: uuid.UUID, db: AsyncSession = Depends(get_db)
+    statementId: uuid.UUID, db: AsyncSession = Depends(get_db), user_id: uuid.UUID = Depends(get_current_user_id)
 ):
-    return await repo.delete_statement(db, statementId)
+    return await repo.delete_statement(db, user_id, statementId)
 
 
 # ==============================================================================
@@ -636,9 +685,11 @@ async def delete_statement_v1(
     response_model=schemas.TransactionRead,
 )
 async def create_transaction_v1(
-    data: schemas.TransactionCreate, db: AsyncSession = Depends(get_db)
+    data: schemas.TransactionCreate,
+    db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    return await repo.create_transaction(db, data)
+    return await repo.create_transaction(db, user_id, data)
 
 
 # Read
@@ -659,6 +710,7 @@ async def get_transactions_v1(
     skip: int = 0,
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
     """One page of matching transactions, newest first.
 
@@ -673,12 +725,10 @@ async def get_transactions_v1(
     a bare list cannot tell it, namely how much it is not showing.
     """
     response.headers["X-Total-Count"] = str(
-        await repo.count_transactions(
-            db, accountId, envelopeId, categoryGroupId, dateFrom, dateTo, q
-        )
+        await repo.count_transactions(db, user_id, accountId, envelopeId, categoryGroupId, dateFrom, dateTo, q)
     )
     return await repo.get_transactions(
-        db, accountId, envelopeId, categoryGroupId, dateFrom, dateTo, q, skip, limit
+        db, user_id, accountId, envelopeId, categoryGroupId, dateFrom, dateTo, q, skip, limit
     )
 
 
@@ -697,8 +747,9 @@ async def get_spent_by_envelope_v1(
     dateFrom: date | None = None,
     dateTo: date | None = None,
     db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    return await repo.get_spent_by_envelope(db, dateFrom, dateTo)
+    return await repo.get_spent_by_envelope(db, user_id, dateFrom, dateTo)
 
 
 # Update
@@ -712,8 +763,9 @@ async def update_transaction_v1(
     data: schemas.TransactionUpdate,
     transactionId: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    return await repo.update_transaction(db, transactionId, data)
+    return await repo.update_transaction(db, user_id, transactionId, data)
 
 
 # Delete
@@ -724,9 +776,9 @@ async def update_transaction_v1(
     response_model=schemas.TransactionDelete,
 )
 async def delete_transaction_v1(
-    transactionId: uuid.UUID, db: AsyncSession = Depends(get_db)
+    transactionId: uuid.UUID, db: AsyncSession = Depends(get_db), user_id: uuid.UUID = Depends(get_current_user_id)
 ):
-    return await repo.delete_transaction(db, transactionId)
+    return await repo.delete_transaction(db, user_id, transactionId)
 
 
 app.include_router(auth_router)
