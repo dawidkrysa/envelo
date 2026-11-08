@@ -228,9 +228,29 @@ def palette(page: ft.Page) -> Palette:
     return DARK if page.platform_brightness == ft.Brightness.DARK else LIGHT
 
 
+def _overlay(p: Palette, light: float, dark: float) -> str:
+    """`ink` at the brandbook's opacity for this palette's mode (§5 Motion)."""
+    return ft.Colors.with_opacity(dark if p is DARK else light, p.ink)
+
+
+def ink_splash(p: Palette, on_brand_fill: bool = False) -> str:
+    """The ripple color for a pressable control. A brand-filled button gets a
+    light ripple: the default grey one over the deep forest fill read as dirt."""
+    if on_brand_fill:
+        return ft.Colors.with_opacity(0.22, p.on_brand)
+    return _overlay(p, 0.10, 0.14)
+
+
 def _theme(p: Palette) -> ft.Theme:
     return ft.Theme(
         font_family=FONT_FAMILY,
+        # Hover, press and splash are painted by Flutter in the browser from
+        # these - set here once, so every `Container(ink=True)` button, nav item
+        # and menu row gets them without a per-pointer-move round trip to the
+        # Python server (which is what an `on_hover` handler would cost).
+        hover_color=_overlay(p, 0.05, 0.07),
+        highlight_color=_overlay(p, 0.08, 0.10),
+        splash_color=ink_splash(p),
         color_scheme=ft.ColorScheme(
             primary=p.brand,
             on_primary=p.on_brand,
