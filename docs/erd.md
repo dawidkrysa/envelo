@@ -9,6 +9,7 @@ Two layers here:
 
 ```mermaid
 erDiagram
+    auth_users ||--o{ auth_refresh_tokens : signs_in_with
     auth_users ||--o{ budget_accounts : owns
     auth_users ||--o{ budget_payees : owns
     auth_users ||--o{ budget_category_groups : owns
@@ -34,6 +35,17 @@ erDiagram
         uuid id PK
         string email UK
         string password_hash
+        timestamp created_at
+    }
+
+    auth_refresh_tokens {
+        uuid id PK
+        uuid user_id FK
+        string token_hash UK
+        uuid family_id
+        timestamp expires_at
+        timestamp revoked_at
+        uuid replaced_by_id FK
         timestamp created_at
     }
 

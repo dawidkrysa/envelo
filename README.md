@@ -16,12 +16,13 @@ Envelo is both a practical tool and a portfolio project demonstrating a Python-b
 
 ## Features (MVP)
 
-- [ ] Import bank statements from a file (CSV / MT940 / OFX)
-- [ ] Envelope-based budgeting with limits and categories
-- [ ] Automatic transaction categorization (rules → ML)
-- [ ] Proactive alerts before an envelope's limit is exceeded
-- [ ] End-of-month spending forecast
-- [ ] Responsive frontend (web + mobile) built with Flet
+- [x] Accounts with sign-in; every budget is private to its owner
+- [x] Import bank statements from a file — CSV today; MT940 / OFX not yet
+- [x] Envelope-based budgeting with limits and categories
+- [x] Automatic transaction categorization — payee rules today; ML in phase 5
+- [x] Proactive alerts before an envelope's limit is exceeded — in the app; email/webhook delivery in phase 6
+- [x] End-of-month spending forecast — straight-line pacing today; a predictive model in phase 5
+- [x] Responsive frontend (web + mobile) built with Flet
 
 See the full roadmap and task breakdown in the project's [GitHub Issues](../../issues), organized by phase (`phase-0` through `phase-7`).
 
@@ -102,7 +103,7 @@ curl localhost:8000/health
 
 ## Project status
 
-Currently in **Phase 0 — local skeleton**. See the [Issues](../../issues) tab for the full roadmap, grouped by implementation phase.
+**Phases 0–4 done — MVP.** One FastAPI gateway and a Flet frontend, with sign-in and per-user data. Next up: phase 5 (event broker and the first service split out). See the [Issues](../../issues) tab for the full roadmap, grouped by implementation phase.
 
 ## License
 
