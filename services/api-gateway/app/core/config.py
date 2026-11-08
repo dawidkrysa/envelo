@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
@@ -23,6 +23,20 @@ class Settings(BaseSettings):
     jwt_secret: SecretStr
     jwt_access_token_expire_minutes: int = 15
     jwt_refresh_token_expire_days: int = 30
+
+    @field_validator("jwt_secret")
+    @classmethod
+    def _jwt_secret_is_strong(cls, v: SecretStr) -> SecretStr:
+        # Anyone who knows (or guesses) this can sign a token for any user, so
+        # a weak one must stop the app at startup - not let it run looking
+        # healthy. 32 characters is RFC 7518's floor for HS256's 256-bit key;
+        # it also rejects the `change_me` placeholder from .env.example.
+        if len(v.get_secret_value()) < 32:
+            raise ValueError(
+                "JWT_SECRET must be at least 32 characters. Generate one with: "
+                'python -c "import secrets; print(secrets.token_urlsafe(32))"'
+            )
+        return v
 
     @property
     def database_url(self) -> URL:

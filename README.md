@@ -80,6 +80,15 @@ cd services/api-gateway && pip install -r requirements.txt && alembic upgrade he
 docker compose up
 ```
 
+Set `JWT_SECRET` in `.env` before starting — the API refuses to start with the
+placeholder or anything shorter than 32 characters
+(`python -c "import secrets; print(secrets.token_urlsafe(32))"`).
+
+The optional seed data (see [`docs/migrations.md`](docs/migrations.md#seed-data-optional))
+creates a demo budget you can sign in to as `dawid@example.com` /
+`envelo-dev-password` — a development-only credential, published on purpose;
+never seed it into a database anyone else can reach.
+
 The `alembic upgrade head` step creates the database tables — see
 [`docs/migrations.md`](docs/migrations.md) for details and how to add new
 migrations.
